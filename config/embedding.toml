@@ -1,0 +1,79 @@
+# 向量化服务配置文件
+
+[embedding]
+# 向量化器类型: "cloud", "local", "hybrid"
+vectorizer_type = "hybrid"
+
+[cloud_embedding]
+# NVIDIA API 配置 (推荐，高质量嵌入模型)
+api_base_url = "https://integrate.api.nvidia.com/v1"
+api_key = "${EMBEDDING_API_KEY}" # 从环境变量读取
+model_name = "nvidia/nv-embedcode-7b-v1"
+encoding_format = "float"
+input_type = "query"
+truncate = "NONE"
+max_retries = 3
+timeout_secs = 30
+batch_size = 50
+
+# 支持的其他云端API提供商示例
+[cloud_embedding.providers]
+
+# NVIDIA API (默认推荐)
+[cloud_embedding.providers.nvidia]
+api_base_url = "https://integrate.api.nvidia.com/v1"
+model_name = "nvidia/nv-embedcode-7b-v1"
+encoding_format = "float"
+input_type = "query"
+truncate = "NONE"
+batch_size = 50
+
+# OpenAI 官方
+[cloud_embedding.providers.openai]
+api_base_url = "https://api.openai.com/v1"
+model_name = "text-embedding-ada-002"
+dimensions = 1536
+
+# Azure OpenAI
+[cloud_embedding.providers.azure]
+api_base_url = "https://your-resource.openai.azure.com"
+model_name = "text-embedding-ada-002"
+api_version = "2023-05-15"
+
+# 智谱AI
+[cloud_embedding.providers.zhipu]
+api_base_url = "https://open.bigmodel.cn/api/paas/v4"
+model_name = "embedding-2"
+dimensions = 1024
+
+# 月之暗面 (Moonshot)
+[cloud_embedding.providers.moonshot]
+api_base_url = "https://api.moonshot.cn/v1"
+model_name = "moonshot-embedding"
+dimensions = 1536
+
+# 通义千问
+[cloud_embedding.providers.qwen]
+api_base_url = "https://dashscope.aliyuncs.com/api/v1"
+model_name = "text-embedding-v1"
+dimensions = 1536
+
+# 文心一言
+[cloud_embedding.providers.wenxin]
+api_base_url = "https://aip.baidubce.com"
+model_name = "embedding-v1"
+dimensions = 384
+
+[local_embedding]
+# 本地向量化配置
+dimension = 256
+algorithm = "hash_based" # 或 "tfidf", "word2vec"
+
+[hybrid_embedding]
+# 混合模式配置
+primary = "cloud"
+fallback = "local"
+# 当云端API失败时，是否缓存到本地
+cache_on_failure = true
+# 云端API健康检查间隔(秒)
+health_check_interval = 300 

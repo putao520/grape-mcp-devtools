@@ -1,0 +1,366 @@
+# 动态MCP工具检测配置文件
+# 这个文件定义了要检测的CLI工具以及它们的映射关系
+
+# 检测配置
+detection:
+  # 检测超时时间（秒）
+  timeout_seconds: 30
+  # 并发检测数量
+  concurrent_checks: 10
+  # 是否启用详细日志
+  verbose_logging: false
+
+# CLI工具检测定义
+tools:
+  # 版本控制工具
+  version_control:
+    git:
+      command: "git"
+      version_args: ["--version"]
+      features: ["version-control"]
+      mcp_tools: ["code-analysis", "changelog"]
+      priority: high
+    
+    svn:
+      command: "svn"
+      version_args: ["--version"]
+      features: ["version-control"]
+      mcp_tools: ["code-analysis"]
+      priority: medium
+    
+    hg:
+      command: "hg"
+      version_args: ["--version"]
+      features: ["version-control"]
+      mcp_tools: ["code-analysis"]
+      priority: low
+
+  # 构建工具
+  build_tools:
+    cargo:
+      command: "cargo"
+      version_args: ["--version"]
+      features: ["build-tool", "package-manager", "rust"]
+      mcp_tools: ["version-check", "dependencies-analysis", "code-analysis"]
+      priority: high
+      subcommands:
+        - name: "clippy"
+          args: ["clippy", "--help"]
+          features: ["code-analysis", "rust"]
+        - name: "doc"
+          args: ["doc", "--help"]
+          features: ["documentation", "rust"]
+        - name: "audit"
+          args: ["audit", "--help"]
+          features: ["security", "rust"]
+    
+    npm:
+      command: "npm"
+      version_args: ["--version"]
+      features: ["build-tool", "package-manager", "javascript"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: high
+      global_packages:
+        enable: true
+        timeout: 10
+    
+    yarn:
+      command: "yarn"
+      version_args: ["--version"]
+      features: ["build-tool", "package-manager", "javascript"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: medium
+    
+    pnpm:
+      command: "pnpm"
+      version_args: ["--version"]
+      features: ["build-tool", "package-manager", "javascript"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: medium
+    
+    pip:
+      command: "pip"
+      version_args: ["--version"]
+      features: ["package-manager", "python"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: high
+    
+    poetry:
+      command: "poetry"
+      version_args: ["--version"]
+      features: ["build-tool", "package-manager", "python"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: medium
+    
+    mvn:
+      command: "mvn"
+      version_args: ["--version"]
+      features: ["build-tool", "java"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: medium
+    
+    gradle:
+      command: "gradle"
+      version_args: ["--version"]
+      features: ["build-tool", "java", "kotlin"]
+      mcp_tools: ["version-check", "dependencies-analysis"]
+      priority: medium
+    
+    go:
+      command: "go"
+      version_args: ["version"]
+      features: ["compiler", "go"]
+      mcp_tools: ["version-check", "code-analysis"]
+      priority: high
+
+  # 文档工具
+  documentation:
+    rustdoc:
+      command: "rustdoc"
+      version_args: ["--version"]
+      features: ["documentation", "rust"]
+      mcp_tools: ["api-docs", "search-docs"]
+      priority: medium
+    
+    jsdoc:
+      command: "jsdoc"
+      version_args: ["--version"]
+      features: ["documentation", "javascript"]
+      mcp_tools: ["api-docs"]
+      priority: medium
+    
+    sphinx-build:
+      command: "sphinx-build"
+      version_args: ["--version"]
+      features: ["documentation", "python"]
+      mcp_tools: ["api-docs", "search-docs"]
+      priority: medium
+    
+    doxygen:
+      command: "doxygen"
+      version_args: ["--version"]
+      features: ["documentation", "c++"]
+      mcp_tools: ["api-docs"]
+      priority: low
+
+  # 代码分析工具
+  code_analysis:
+    clippy:
+      command: "clippy"
+      version_args: ["--version"]
+      features: ["code-analysis", "rust"]
+      mcp_tools: ["code-analysis"]
+      priority: high
+    
+    eslint:
+      command: "eslint"
+      version_args: ["--version"]
+      features: ["code-analysis", "javascript"]
+      mcp_tools: ["code-analysis"]
+      priority: high
+    
+    pylint:
+      command: "pylint"
+      version_args: ["--version"]
+      features: ["code-analysis", "python"]
+      mcp_tools: ["code-analysis"]
+      priority: medium
+    
+    flake8:
+      command: "flake8"
+      version_args: ["--version"]
+      features: ["code-analysis", "python"]
+      mcp_tools: ["code-analysis"]
+      priority: medium
+    
+    black:
+      command: "black"
+      version_args: ["--version"]
+      features: ["code-formatting", "python"]
+      mcp_tools: ["code-analysis"]
+      priority: medium
+    
+    prettier:
+      command: "prettier"
+      version_args: ["--version"]
+      features: ["code-formatting", "javascript"]
+      mcp_tools: ["code-analysis"]
+      priority: medium
+
+  # 容器工具
+  containerization:
+    docker:
+      command: "docker"
+      version_args: ["--version"]
+      features: ["containerization"]
+      mcp_tools: ["deployment", "environment"]
+      priority: high
+      additional_checks:
+        - command: "docker-compose"
+          args: ["--version"]
+          feature: "docker-compose"
+    
+    podman:
+      command: "podman"
+      version_args: ["--version"]
+      features: ["containerization"]
+      mcp_tools: ["deployment", "environment"]
+      priority: medium
+    
+    kubectl:
+      command: "kubectl"
+      version_args: ["version", "--client"]
+      features: ["containerization", "kubernetes"]
+      mcp_tools: ["deployment", "orchestration"]
+      priority: medium
+    
+    helm:
+      command: "helm"
+      version_args: ["version"]
+      features: ["containerization", "kubernetes"]
+      mcp_tools: ["deployment", "orchestration"]
+      priority: low
+
+  # 云工具
+  cloud_tools:
+    aws:
+      command: "aws"
+      version_args: ["--version"]
+      features: ["cloud", "aws"]
+      mcp_tools: ["deployment", "infrastructure"]
+      priority: medium
+    
+    gcloud:
+      command: "gcloud"
+      version_args: ["--version"]
+      features: ["cloud", "gcp"]
+      mcp_tools: ["deployment", "infrastructure"]
+      priority: medium
+    
+    az:
+      command: "az"
+      version_args: ["--version"]
+      features: ["cloud", "azure"]
+      mcp_tools: ["deployment", "infrastructure"]
+      priority: medium
+    
+    terraform:
+      command: "terraform"
+      version_args: ["--version"]
+      features: ["infrastructure", "iac"]
+      mcp_tools: ["infrastructure", "deployment"]
+      priority: medium
+
+  # 系统工具
+  system_tools:
+    curl:
+      command: "curl"
+      version_args: ["--version"]
+      features: ["networking", "http"]
+      mcp_tools: ["api-testing", "network"]
+      priority: high
+    
+    wget:
+      command: "wget"
+      version_args: ["--version"]
+      features: ["networking", "download"]
+      mcp_tools: ["network"]
+      priority: medium
+    
+    jq:
+      command: "jq"
+      version_args: ["--version"]
+      features: ["json", "data-processing"]
+      mcp_tools: ["data-analysis"]
+      priority: high
+    
+    grep:
+      command: "grep"
+      version_args: ["--version"]
+      features: ["text-processing", "search"]
+      mcp_tools: ["search", "analysis"]
+      priority: high
+
+# MCP工具映射
+mcp_tool_mapping:
+  version-check:
+    class: "CheckVersionTool"
+    description: "检查包和依赖版本"
+    universal: true
+  
+  dependencies-analysis:
+    class: "AnalyzeDependenciesTool"
+    description: "分析项目依赖"
+    universal: true
+  
+  code-analysis:
+    class: "AnalyzeCodeTool"
+    description: "代码质量分析"
+    universal: true
+  
+  api-docs:
+    class: "GetApiDocsTool"
+    description: "获取API文档"
+    universal: true
+  
+  search-docs:
+    class: "SearchDocsTools"
+    description: "搜索文档"
+    universal: true
+  
+  changelog:
+    class: "GetChangelogTool"
+    description: "获取变更日志"
+    universal: true
+  
+  compare-versions:
+    class: "CompareVersionsTool"
+    description: "比较版本"
+    universal: true
+
+# 注册策略配置
+strategies:
+  only_available:
+    description: "仅注册检测到的可用工具"
+    default: true
+    include_universal: true
+  
+  force_all:
+    description: "强制注册所有已定义的工具"
+    include_universal: true
+    override_detection: true
+  
+  feature_based:
+    description: "基于特性选择性注册"
+    include_universal: true
+    available_features:
+      - "build-tool"
+      - "package-manager"
+      - "version-control"
+      - "containerization"
+      - "documentation"
+      - "code-analysis"
+      - "cloud"
+      - "networking"
+      - "rust"
+      - "javascript"
+      - "python"
+      - "java"
+      - "go"
+
+# 环境特定配置
+environments:
+  development:
+    enable_all_tools: true
+    verbose_logging: true
+    include_experimental: true
+  
+  production:
+    only_stable_tools: true
+    minimal_logging: true
+    performance_optimized: true
+  
+  ci_cd:
+    force_all_registration: true
+    fail_on_detection_errors: false
+    cache_detection_results: true 

@@ -1,0 +1,37 @@
+# MCP 多语言文档服务默认配置
+
+[server]
+host = "127.0.0.1"
+port = 8080
+workers = 0  # 0 表示使用 CPU 核心数
+timeout_secs = 30
+
+[cache]
+# 缓存目录留空，使用默认系统缓存目录
+ttl_secs = 86400  # 24小时
+max_size_mb = 500
+
+[vector_db]
+# 连接字符串留空，使用嵌入式模式
+connection_string = ""
+# 存储路径留空，使用默认系统数据目录
+storage_path = ""
+collection_prefix = "mcp_"
+vector_dimensions = 768
+
+[retrieval]
+enable_multi_level = true
+max_results_per_level = 5
+enable_hybrid = true
+max_levels = 3
+minimum_similarity = 0.6
+
+[mcp_config]
+model_name = "mcp-docs-model"
+max_tokens = 1024
+max_contexts = 10
+
+[logging]
+level = "info"
+enable_file = false
+file_path = "./logs/mcp-docs.log"
