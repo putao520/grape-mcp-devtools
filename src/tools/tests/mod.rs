@@ -23,4 +23,10 @@ pub mod rust_test;
 #[cfg(test)]
 pub mod java_test;
 #[cfg(test)]
-pub mod multi_language_test; 
+pub mod multi_language_test;
+#[cfg(test)]
+pub mod enhanced_language_support_test;
+#[cfg(test)]
+pub mod typescript_test;
+#[cfg(test)]
+pub mod description_optimization_test; 

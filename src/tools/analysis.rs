@@ -770,7 +770,7 @@ impl MCPTool for AnalyzeCodeTool {
     }
     
     fn description(&self) -> &'static str {
-        "分析代码质量和结构"
+        "当LLM需要分析用户提供的代码质量、发现潜在问题或提供代码改进建议时，使用此工具检查代码中的问题、性能瓶颈和最佳实践建议。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -782,11 +782,11 @@ impl MCPTool for AnalyzeCodeTool {
                 properties: {
                     let mut map = HashMap::new();
                     map.insert("code".to_string(), Schema::String(SchemaString {
-                        description: Some("要分析的代码".to_string()),
+                        description: Some("要分析的代码内容".to_string()),
                         enum_values: None,
                     }));
                     map.insert("language".to_string(), Schema::String(SchemaString {
-                        description: Some("编程语言".to_string()),
+                        description: Some("代码所使用的编程语言".to_string()),
                         enum_values: Some(vec![
                             "rust".to_string(),
                             "python".to_string(),
@@ -844,7 +844,7 @@ impl MCPTool for SuggestRefactoringTool {
     }
     
     fn description(&self) -> &'static str {
-        "提供代码重构建议"
+        "当LLM需要为用户提供代码重构建议、优化方案或改进代码结构时，使用此工具分析代码并提供具体的重构建议、优化步骤和最佳实践指导。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -860,7 +860,7 @@ impl MCPTool for SuggestRefactoringTool {
                         enum_values: None,
                     }));
                     map.insert("language".to_string(), Schema::String(SchemaString {
-                        description: Some("编程语言".to_string()),
+                        description: Some("代码所使用的编程语言".to_string()),
                         enum_values: Some(vec![
                             "rust".to_string(),
                             "python".to_string(),

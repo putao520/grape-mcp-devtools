@@ -4,6 +4,9 @@ pub mod base;
 pub mod changelog;
 pub mod dependencies;
 pub mod file_go_docs_tool;
+pub mod python_docs_tool;
+pub mod javascript_docs_tool;
+pub mod typescript_docs_tool;
 pub mod search;
 pub mod versioning;
 
@@ -14,3 +17,6 @@ pub use dependencies::AnalyzeDependenciesTool;
 pub use analysis::{AnalyzeCodeTool, SuggestRefactoringTool};
 pub use changelog::{GetChangelogTool, CompareVersionsTool};
 pub use api_docs::GetApiDocsTool;
+pub use python_docs_tool::PythonDocsTool;
+pub use javascript_docs_tool::JavaScriptDocsTool;
+pub use typescript_docs_tool::TypeScriptDocsTool;

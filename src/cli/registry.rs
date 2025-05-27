@@ -51,6 +51,9 @@ impl DynamicToolRegistry {
         use crate::tools::analysis::AnalyzeCodeTool;
         use crate::tools::changelog::{GetChangelogTool, CompareVersionsTool};
         use crate::tools::api_docs::GetApiDocsTool;
+        use crate::tools::python_docs_tool::PythonDocsTool;
+        use crate::tools::javascript_docs_tool::JavaScriptDocsTool;
+        use crate::tools::typescript_docs_tool::TypeScriptDocsTool;
 
         // 版本控制相关工具
         self.register_factory("git", || {
@@ -84,11 +87,19 @@ impl DynamicToolRegistry {
         });
 
         self.register_factory("jsdoc", || {
-            Box::new(GetApiDocsTool::new(None))
+            Box::new(JavaScriptDocsTool::new())
+        });
+
+        self.register_factory("tsc", || {
+            Box::new(TypeScriptDocsTool::new())
+        });
+
+        self.register_factory("typedoc", || {
+            Box::new(TypeScriptDocsTool::new())
         });
 
         self.register_factory("sphinx-build", || {
-            Box::new(SearchDocsTools::new())
+            Box::new(PythonDocsTool::new())
         });
 
         // 代码分析工具
@@ -140,6 +151,19 @@ impl DynamicToolRegistry {
 
         self.register_factory("_universal_api_docs", || {
             Box::new(GetApiDocsTool::new(None))
+        });
+
+        // 通用语言文档工具（始终可用）
+        self.register_factory("_universal_python_docs", || {
+            Box::new(PythonDocsTool::new())
+        });
+
+        self.register_factory("_universal_javascript_docs", || {
+            Box::new(JavaScriptDocsTool::new())
+        });
+
+        self.register_factory("_universal_typescript_docs", || {
+            Box::new(TypeScriptDocsTool::new())
         });
     }
 
@@ -272,6 +296,9 @@ impl DynamicToolRegistry {
             "_universal_changelog",
             "_universal_compare_versions",
             "_universal_api_docs",
+            "_universal_python_docs",
+            "_universal_javascript_docs",
+            "_universal_typescript_docs",
         ];
 
         for tool_name in universal_tools {

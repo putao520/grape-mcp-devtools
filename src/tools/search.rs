@@ -185,7 +185,7 @@ impl MCPTool for SearchDocsTools {
     }
     
     fn description(&self) -> &str {
-        "搜索编程语言文档以获取API参考、教程和最佳实践"
+        "当LLM需要查找能实现特定功能的包或库时，使用此工具搜索相关的包信息、官方文档、API参考和使用指南，帮助找到合适的技术解决方案。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -194,12 +194,12 @@ impl MCPTool for SearchDocsTools {
         SCHEMA.get_or_init(|| {            Schema::Object(SchemaObject {
                 required: vec!["query".to_string(), "language".to_string()],
                 properties: {
-                    let mut map = HashMap::new();map.insert("query".to_string(), Schema::String(SchemaString {
-                        description: Some("搜索查询".to_string()),
+                    let mut map = HashMap::new();                    map.insert("query".to_string(), Schema::String(SchemaString {
+                        description: Some("要搜索的功能或技术需求".to_string()),
                         enum_values: None,
                     }));
                     map.insert("language".to_string(), Schema::String(SchemaString {
-                        description: Some("编程语言".to_string()),
+                        description: Some("目标编程语言".to_string()),
                         enum_values: None,
                     }));
                     map.insert("scope".to_string(), Schema::String(SchemaString {

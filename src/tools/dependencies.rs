@@ -117,7 +117,7 @@ impl MCPTool for AnalyzeDependenciesTool {
     }
 
     fn description(&self) -> &str {
-        "分析项目依赖，识别过时的包、安全漏洞和版本兼容性问题"
+        "当LLM需要了解项目的依赖关系、包的兼容性或依赖安全状况时，使用此工具分析指定项目的依赖信息，包括依赖版本、更新状态、安全漏洞和兼容性检查。"
     }
 
     fn parameters_schema(&self) -> &Schema {
@@ -126,12 +126,12 @@ impl MCPTool for AnalyzeDependenciesTool {
         SCHEMA.get_or_init(|| {            Schema::Object(SchemaObject {
                 required: vec!["language".to_string(), "files".to_string()],
                 properties: {
-                    let mut map = HashMap::new();map.insert("language".to_string(), Schema::String(SchemaString {
-                        description: Some("编程语言".to_string()),
+                    let mut map = HashMap::new();                    map.insert("language".to_string(), Schema::String(SchemaString {
+                        description: Some("项目所使用的编程语言".to_string()),
                         enum_values: Some(vec!["rust".to_string(), "python".to_string(), "javascript".to_string()]),
                     }));
                     map.insert("files".to_string(), Schema::Array(SchemaArray {
-                        description: Some("依赖文件路径列表".to_string()),
+                        description: Some("要分析的依赖文件路径列表".to_string()),
                         items: Box::new(Schema::String(SchemaString::default())),
                     }));
                     map.insert("check_updates".to_string(), Schema::Boolean(SchemaBoolean {

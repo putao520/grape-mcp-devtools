@@ -1,4 +1,5 @@
-use grape_mcp_devtools::cli::{CliDetector, DynamicToolRegistry, RegistrationStrategy};
+use grape_mcp_devtools::cli::{CliDetector, DynamicToolRegistry};
+use grape_mcp_devtools::cli::registry::RegistrationStrategy;
 use grape_mcp_devtools::mcp::server::MCPServer;
 
 #[tokio::test]

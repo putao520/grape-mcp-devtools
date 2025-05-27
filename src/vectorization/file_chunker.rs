@@ -230,7 +230,7 @@ impl SmartFileChunker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::base::{FileMetadata, FileType};
+    use crate::tools::base::FileType;
     
     #[test]
     fn test_small_file_no_chunking() {
@@ -244,7 +244,8 @@ mod tests {
             file_path: "test.go".to_string(),
             content: "package main\n\nfunc main() {\n    println(\"Hello\")\n}".to_string(),
             hierarchy_path: vec!["test.go".to_string()],
-            metadata: FileMetadata::default(),
+            file_type: FileType::Source,
+            created_at: std::time::SystemTime::now(),
         };
         
         let chunks = chunker.chunk_file(&fragment).unwrap();
@@ -271,7 +272,8 @@ mod tests {
             file_path: "large.txt".to_string(),
             content: large_content,
             hierarchy_path: vec!["large.txt".to_string()],
-            metadata: FileMetadata::default(),
+            file_type: FileType::Other("text".to_string()),
+            created_at: std::time::SystemTime::now(),
         };
         
         let chunks = chunker.chunk_file(&fragment).unwrap();
@@ -303,7 +305,8 @@ mod tests {
             file_path: "test.txt".to_string(),
             content: content.to_string(),
             hierarchy_path: vec!["test.txt".to_string()],
-            metadata: FileMetadata::default(),
+            file_type: FileType::Other("text".to_string()),
+            created_at: std::time::SystemTime::now(),
         };
         
         let chunks = chunker.chunk_file(&fragment).unwrap();

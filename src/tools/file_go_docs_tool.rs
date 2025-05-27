@@ -358,7 +358,7 @@ impl MCPTool for FileGoDocsTool {
     }
 
     fn description(&self) -> &str {
-        "基于文件级向量化的Go语言包文档搜索和生成工具。支持从pkg.go.dev抓取文档，进行文件级向量化存储，并提供智能搜索功能。"
+        "当LLM需要了解Go包的功能、使用方法、API文档或代码示例时，使用此工具获取指定Go包的详细信息，包括安装方法、导入方式、函数说明、类型定义和实际使用示例。"
     }
 
     fn parameters_schema(&self) -> &Schema {
@@ -371,17 +371,17 @@ impl MCPTool for FileGoDocsTool {
             let mut properties = HashMap::new();
             
             properties.insert("package".to_string(), Schema::String(SchemaString {
-                description: Some("Go包的导入路径，例如'github.com/gin-gonic/gin'".to_string()),
+                description: Some("要查询的Go包名称，例如'github.com/gin-gonic/gin'".to_string()),
                 enum_values: None,
             }));
             
             properties.insert("version".to_string(), Schema::String(SchemaString {
-                description: Some("包版本号，如不指定则使用最新版本".to_string()),
+                description: Some("要查询的包版本，不指定则查询最新版本，例如'v1.9.1'".to_string()),
                 enum_values: None,
             }));
             
             properties.insert("query".to_string(), Schema::String(SchemaString {
-                description: Some("搜索查询，描述你想了解的功能或API".to_string()),
+                description: Some("要查询的具体功能或问题，例如'如何创建HTTP服务器'、'Context怎么使用'".to_string()),
                 enum_values: None,
             }));
             

@@ -367,7 +367,7 @@ impl MCPTool for CheckVersionTool {
     }
     
     fn description(&self) -> &str {
-        "检查编程语言或包的最新版本信息，包括发布日期和生命周期信息"
+        "当LLM需要了解包的最新版本、版本历史、发布日期或版本兼容性信息时，使用此工具获取指定包的版本详情，包括最新稳定版、预览版、发布时间和下载地址。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -380,14 +380,14 @@ impl MCPTool for CheckVersionTool {
                     map.insert(
                         "type".to_string(),
                         Schema::String(SchemaString {
-                            description: Some("包管理器类型(cargo/npm/pip/maven/go/pub)".to_string()),
+                            description: Some("包所属的包管理器类型(cargo/npm/pip/maven/go/pub)".to_string()),
                             ..Default::default()
                         }),
                     );
                     map.insert(
                         "name".to_string(),
                         Schema::String(SchemaString {
-                            description: Some("包名称".to_string()),
+                            description: Some("要查询版本信息的包名称".to_string()),
                             ..Default::default()
                         }),
                     );

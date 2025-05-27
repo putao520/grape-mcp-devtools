@@ -25,7 +25,7 @@ impl MCPTool for GetChangelogTool {
     }
     
     fn description(&self) -> &'static str {
-        "获取指定包的变更日志"
+        "当LLM需要了解包的版本更新内容、新增功能或破坏性变更时，使用此工具获取指定包的变更日志，包括版本历史、更新说明、新功能介绍和升级注意事项。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -37,15 +37,15 @@ impl MCPTool for GetChangelogTool {
                 properties: {
                     let mut map = HashMap::new();
                     map.insert("package".to_string(), Schema::String(SchemaString {
-                        description: Some("包名称".to_string()),
+                        description: Some("要查询变更日志的包名称".to_string()),
                         enum_values: None,
                     }));
                     map.insert("language".to_string(), Schema::String(SchemaString {
-                        description: Some("编程语言".to_string()),
+                        description: Some("包所属的编程语言".to_string()),
                         enum_values: None,
                     }));
                     map.insert("version".to_string(), Schema::String(SchemaString {
-                        description: Some("版本号".to_string()),
+                        description: Some("要查询的特定版本号，不指定则查询最新版本".to_string()),
                         enum_values: None,
                     }));
                     map
@@ -240,7 +240,7 @@ impl MCPTool for CompareVersionsTool {
     }
     
     fn description(&self) -> &'static str {
-        "比较两个版本之间的差异"
+        "当LLM需要了解包的两个版本之间的差异、升级影响或版本选择建议时，使用此工具比较指定包的两个版本，包括功能变更、破坏性改动、新增特性和升级建议。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -252,19 +252,19 @@ impl MCPTool for CompareVersionsTool {
                 properties: {
                     let mut map = HashMap::new();
                     map.insert("package".to_string(), Schema::String(SchemaString {
-                        description: Some("包名称".to_string()),
+                        description: Some("要比较版本的包名称".to_string()),
                         enum_values: None,
                     }));
                     map.insert("version1".to_string(), Schema::String(SchemaString {
-                        description: Some("第一个版本".to_string()),
+                        description: Some("要比较的第一个版本号".to_string()),
                         enum_values: None,
                     }));
                     map.insert("version2".to_string(), Schema::String(SchemaString {
-                        description: Some("第二个版本".to_string()),
+                        description: Some("要比较的第二个版本号".to_string()),
                         enum_values: None,
                     }));
                     map.insert("language".to_string(), Schema::String(SchemaString {
-                        description: Some("编程语言".to_string()),
+                        description: Some("包所属的编程语言".to_string()),
                         enum_values: None,
                     }));
                     map
