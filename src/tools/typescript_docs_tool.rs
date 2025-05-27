@@ -445,7 +445,7 @@ impl MCPTool for TypeScriptDocsTool {
     }
 
     fn description(&self) -> &'static str {
-        "当LLM需要了解TypeScript包的类型定义、使用方法、配置选项或类型安全实践时，使用此工具获取指定TypeScript包的详细信息，包括类型声明、安装方法、导入方式和类型使用示例。"
+        "在需要了解TypeScript包的类型定义、使用方法、配置选项或类型安全实践时，获取指定TypeScript包的详细信息，包括类型声明、安装方法、导入方式和类型使用示例。"
     }
 
     fn parameters_schema(&self) -> &Schema {

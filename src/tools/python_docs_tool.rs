@@ -327,7 +327,7 @@ impl MCPTool for PythonDocsTool {
     }
 
     fn description(&self) -> &'static str {
-        "当LLM需要了解Python包的功能、安装方法、使用示例或API说明时，使用此工具获取指定Python包的详细信息，包括pip安装命令、导入方式、主要功能和代码示例。"
+        "在需要了解Python包的功能、安装方法、使用示例或API说明时，获取指定Python包的详细信息，包括pip安装命令、导入方式、主要功能和代码示例。"
     }
 
     fn parameters_schema(&self) -> &Schema {

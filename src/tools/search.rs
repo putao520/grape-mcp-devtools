@@ -185,7 +185,7 @@ impl MCPTool for SearchDocsTools {
     }
     
     fn description(&self) -> &str {
-        "当LLM需要查找能实现特定功能的包或库时，使用此工具搜索相关的包信息、官方文档、API参考和使用指南，帮助找到合适的技术解决方案。"
+        "在需要查找能实现特定功能的包或库时，搜索相关的包信息、官方文档、API参考和使用指南，帮助找到合适的技术解决方案。"
     }
     
     fn parameters_schema(&self) -> &Schema {

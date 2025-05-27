@@ -770,7 +770,7 @@ impl MCPTool for AnalyzeCodeTool {
     }
     
     fn description(&self) -> &'static str {
-        "当LLM需要分析用户提供的代码质量、发现潜在问题或提供代码改进建议时，使用此工具检查代码中的问题、性能瓶颈和最佳实践建议。"
+        "在需要分析代码质量、发现潜在问题或获取代码改进建议时，检查代码中的问题、性能瓶颈和最佳实践建议。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -844,7 +844,7 @@ impl MCPTool for SuggestRefactoringTool {
     }
     
     fn description(&self) -> &'static str {
-        "当LLM需要为用户提供代码重构建议、优化方案或改进代码结构时，使用此工具分析代码并提供具体的重构建议、优化步骤和最佳实践指导。"
+        "在需要获取代码重构建议、优化方案或改进代码结构时，分析代码并提供具体的重构建议、优化步骤和最佳实践指导。"
     }
     
     fn parameters_schema(&self) -> &Schema {

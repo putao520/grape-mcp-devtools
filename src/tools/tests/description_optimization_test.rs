@@ -14,8 +14,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_description_starts_with_llm_context() {
-        // 测试所有工具描述都以"当LLM需要"开头，符合新的描述模式
+    fn test_description_starts_with_need_context() {
+        // 测试所有工具描述都以"在需要"开头，符合新的泛化描述模式
         let tools: Vec<Box<dyn MCPTool>> = vec![
             Box::new(PythonDocsTool::new()),
             Box::new(JavaScriptDocsTool::new()),
@@ -32,8 +32,8 @@ mod tests {
         for tool in tools {
             let description = tool.description();
             assert!(
-                description.starts_with("当LLM需要"),
-                "工具 {} 的描述应该以'当LLM需要'开头，实际描述: {}",
+                description.starts_with("在需要"),
+                "工具 {} 的描述应该以'在需要'开头，实际描述: {}",
                 tool.name(),
                 description
             );
@@ -107,6 +107,8 @@ mod tests {
             "当用户觉得",
             "当用户的代码",
             "当用户想要",
+            "当LLM需要",
+            "使用此工具",
         ];
 
         for tool in tools {

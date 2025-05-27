@@ -367,7 +367,7 @@ impl MCPTool for CheckVersionTool {
     }
     
     fn description(&self) -> &str {
-        "当LLM需要了解包的最新版本、版本历史、发布日期或版本兼容性信息时，使用此工具获取指定包的版本详情，包括最新稳定版、预览版、发布时间和下载地址。"
+        "在需要了解包的最新版本、版本历史、发布日期或版本兼容性信息时，获取指定包的版本详情，包括最新稳定版、预览版、发布时间和下载地址。"
     }
     
     fn parameters_schema(&self) -> &Schema {

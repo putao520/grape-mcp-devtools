@@ -338,7 +338,7 @@ impl MCPTool for JavaScriptDocsTool {
     }
 
     fn description(&self) -> &'static str {
-        "当LLM需要了解JavaScript/Node.js包的功能、安装配置、使用方法或API文档时，使用此工具获取指定包的详细信息，包括npm安装、导入方式、配置选项和使用示例。"
+        "在需要了解JavaScript/Node.js包的功能、安装配置、使用方法或API文档时，获取指定包的详细信息，包括npm安装、导入方式、配置选项和使用示例。"
     }
 
     fn parameters_schema(&self) -> &Schema {

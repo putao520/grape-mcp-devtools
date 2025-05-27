@@ -9,104 +9,484 @@ use chrono::{DateTime, Utc};
 use anyhow::Result;
 use crate::errors::MCPError;
 use super::base::{MCPTool, ToolAnnotations, Schema, SchemaObject, SchemaString, SchemaBoolean, SchemaArray};
+use regex::Regex;
+use roxmltree;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct DependencyInfo {
     name: String,
     current_version: String,
-    latest_version: String,
-    release_date: DateTime<Utc>,
+    latest_version: Option<String>,
+    release_date: Option<DateTime<Utc>>,
     security_alerts: Vec<String>,
+    dependency_type: String, // "direct", "dev", "peer", etc.
+    source: String, // "cargo", "npm", "pip", etc.
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CargoTomlDependency {
+    version: Option<String>,
+    path: Option<String>,
+    git: Option<String>,
+    branch: Option<String>,
+    tag: Option<String>,
+    rev: Option<String>,
+    features: Option<Vec<String>>,
+    optional: Option<bool>,
+    default_features: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PackageJsonDependencies {
+    dependencies: Option<HashMap<String, String>>,
+    #[serde(rename = "devDependencies")]
+    dev_dependencies: Option<HashMap<String, String>>,
+    #[serde(rename = "peerDependencies")]
+    peer_dependencies: Option<HashMap<String, String>>,
+    #[serde(rename = "optionalDependencies")]
+    optional_dependencies: Option<HashMap<String, String>>,
 }
 
 pub struct AnalyzeDependenciesTool {
     annotations: ToolAnnotations,
     cache: Arc<RwLock<HashMap<String, (Vec<DependencyInfo>, DateTime<Utc>)>>>,
-    security_db: Arc<RwLock<HashMap<String, Vec<String>>>>, // 模拟安全漏洞数据库
+    security_db: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    client: reqwest::Client,
 }
 
 impl AnalyzeDependenciesTool {
     pub fn new() -> Self {
-        Self {            annotations: ToolAnnotations {
+        Self {
+            annotations: ToolAnnotations {
                 category: "依赖分析".to_string(),
                 tags: vec!["依赖".to_string(), "分析".to_string()],
                 version: "1.0".to_string(),
             },
             cache: Arc::new(RwLock::new(HashMap::new())),
             security_db: Arc::new(RwLock::new(HashMap::new())),
+            client: reqwest::Client::new(),
         }
     }
 
     // 解析不同类型的依赖文件
-    async fn parse_dependency_file(&self, language: &str, file_path: &str) -> Result<Vec<(String, String)>> {
+    async fn parse_dependency_file(&self, language: &str, file_path: &str) -> Result<Vec<DependencyInfo>> {
         // 验证文件是否存在
         if !Path::new(file_path).exists() {
             return Err(MCPError::NotFound(format!("文件不存在: {}", file_path)).into());
         }
 
         // 根据文件类型解析依赖
-        match language {
+        match language.to_lowercase().as_str() {
             "rust" => self.parse_cargo_toml(file_path).await,
             "python" => self.parse_requirements_txt(file_path).await,
-            "javascript" | "typescript" => self.parse_package_json(file_path).await,
+            "javascript" | "typescript" | "node" => self.parse_package_json(file_path).await,
+            "java" => self.parse_pom_xml(file_path).await,
+            "go" => self.parse_go_mod(file_path).await,
+            "dart" | "flutter" => self.parse_pubspec_yaml(file_path).await,
             _ => Err(MCPError::InvalidParameter(format!(
                 "不支持的编程语言: {}", language
             )).into()),
         }
     }
 
-    async fn parse_cargo_toml(&self, _file_path: &str) -> Result<Vec<(String, String)>> {
-        // 实际实现中应该使用 toml 解析器
-        // 这里仅作为示例返回一些模拟数据
-        Ok(vec![
-            ("tokio".to_string(), "1.36.0".to_string()),
-            ("serde".to_string(), "1.0.197".to_string()),
-        ])
+    async fn parse_cargo_toml(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let content = tokio::fs::read_to_string(file_path).await?;
+        let parsed: toml::Value = toml::from_str(&content)?;
+        
+        let mut dependencies = Vec::new();
+        
+        // 解析 [dependencies]
+        if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_table()) {
+            for (name, value) in deps {
+                let dep_info = self.parse_cargo_dependency(name, value, "direct", "cargo").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        // 解析 [dev-dependencies]
+        if let Some(dev_deps) = parsed.get("dev-dependencies").and_then(|v| v.as_table()) {
+            for (name, value) in dev_deps {
+                let dep_info = self.parse_cargo_dependency(name, value, "dev", "cargo").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        // 解析 [build-dependencies]
+        if let Some(build_deps) = parsed.get("build-dependencies").and_then(|v| v.as_table()) {
+            for (name, value) in build_deps {
+                let dep_info = self.parse_cargo_dependency(name, value, "build", "cargo").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        Ok(dependencies)
     }
 
-    async fn parse_requirements_txt(&self, _file_path: &str) -> Result<Vec<(String, String)>> {
-        Ok(vec![
-            ("requests".to_string(), "2.31.0".to_string()),
-            ("flask".to_string(), "3.0.2".to_string()),
-        ])
-    }
-
-    async fn parse_package_json(&self, _file_path: &str) -> Result<Vec<(String, String)>> {
-        Ok(vec![
-            ("express".to_string(), "4.18.3".to_string()),
-            ("typescript".to_string(), "5.4.2".to_string()),
-        ])
-    }
-
-    // 检查依赖项的最新版本和安全警告
-    async fn check_dependency(&self, name: &str, current_version: &str) -> Result<DependencyInfo> {
-        // 在实际实现中，这里应该查询包管理器的 API
-        // 这里使用模拟数据
-        let latest_version = match name {
-            "tokio" => "1.36.0",
-            "serde" => "1.0.197",
-            "requests" => "2.31.0",
-            "flask" => "3.0.2",
-            "express" => "4.18.3",
-            "typescript" => "5.4.2",
-            _ => current_version,
+    async fn parse_cargo_dependency(&self, name: &str, value: &toml::Value, dep_type: &str, source: &str) -> Result<DependencyInfo> {
+        let version = match value {
+            toml::Value::String(v) => v.clone(),
+            toml::Value::Table(table) => {
+                table.get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*")
+                    .to_string()
+            },
+            _ => "*".to_string(),
         };
 
-        // 检查安全警告
-        let security_alerts = {
-            let db = self.security_db.read().await;
-            db.get(name)
-                .cloned()
-                .unwrap_or_default()
-        };
+        // 获取最新版本信息
+        let latest_version = self.fetch_latest_version("cargo", name).await.ok();
+        
+        // 检查安全漏洞
+        let security_alerts = self.check_security_vulnerabilities("cargo", name, &version).await?;
 
         Ok(DependencyInfo {
             name: name.to_string(),
-            current_version: current_version.to_string(),
-            latest_version: latest_version.to_string(),
-            release_date: Utc::now(), // 实际实现中应该从包管理器获取
+            current_version: version,
+            latest_version,
+            release_date: None, // 可以通过API获取
             security_alerts,
+            dependency_type: dep_type.to_string(),
+            source: source.to_string(),
         })
+    }
+
+    async fn parse_package_json(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let content = tokio::fs::read_to_string(file_path).await?;
+        let parsed: PackageJsonDependencies = serde_json::from_str(&content)?;
+        
+        let mut dependencies = Vec::new();
+        
+        // 解析 dependencies
+        if let Some(deps) = parsed.dependencies {
+            for (name, version) in deps {
+                let dep_info = self.parse_npm_dependency(&name, &version, "direct", "npm").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        // 解析 devDependencies
+        if let Some(dev_deps) = parsed.dev_dependencies {
+            for (name, version) in dev_deps {
+                let dep_info = self.parse_npm_dependency(&name, &version, "dev", "npm").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        // 解析 peerDependencies
+        if let Some(peer_deps) = parsed.peer_dependencies {
+            for (name, version) in peer_deps {
+                let dep_info = self.parse_npm_dependency(&name, &version, "peer", "npm").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        // 解析 optionalDependencies
+        if let Some(optional_deps) = parsed.optional_dependencies {
+            for (name, version) in optional_deps {
+                let dep_info = self.parse_npm_dependency(&name, &version, "optional", "npm").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        Ok(dependencies)
+    }
+
+    async fn parse_npm_dependency(&self, name: &str, version: &str, dep_type: &str, source: &str) -> Result<DependencyInfo> {
+        // 清理版本号（移除 ^, ~, >= 等前缀）
+        let clean_version = version.trim_start_matches(&['^', '~', '>', '=', ' '][..]).to_string();
+        
+        // 获取最新版本信息
+        let latest_version = self.fetch_latest_version("npm", name).await.ok();
+        
+        // 检查安全漏洞
+        let security_alerts = self.check_security_vulnerabilities("npm", name, &clean_version).await?;
+
+        Ok(DependencyInfo {
+            name: name.to_string(),
+            current_version: clean_version,
+            latest_version,
+            release_date: None,
+            security_alerts,
+            dependency_type: dep_type.to_string(),
+            source: source.to_string(),
+        })
+    }
+
+    async fn parse_requirements_txt(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let content = tokio::fs::read_to_string(file_path).await?;
+        let mut dependencies = Vec::new();
+        
+        // 正则表达式匹配 package==version, package>=version 等格式
+        let re = Regex::new(r"^([a-zA-Z0-9_-]+)([><=!]+)([0-9.]+.*?)(?:\s|$)")?;
+        let simple_re = Regex::new(r"^([a-zA-Z0-9_-]+)(?:\s|$)")?;
+        
+        for line in content.lines() {
+            let line = line.trim();
+            
+            // 跳过注释和空行
+            if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
+                continue;
+            }
+            
+            if let Some(caps) = re.captures(line) {
+                let name = caps.get(1).unwrap().as_str();
+                let version = caps.get(3).unwrap().as_str();
+                
+                let dep_info = self.parse_pip_dependency(name, version, "direct", "pip").await?;
+                dependencies.push(dep_info);
+            } else if let Some(caps) = simple_re.captures(line) {
+                let name = caps.get(1).unwrap().as_str();
+                
+                let dep_info = self.parse_pip_dependency(name, "*", "direct", "pip").await?;
+                dependencies.push(dep_info);
+            }
+        }
+        
+        Ok(dependencies)
+    }
+
+    async fn parse_pip_dependency(&self, name: &str, version: &str, dep_type: &str, source: &str) -> Result<DependencyInfo> {
+        // 获取最新版本信息
+        let latest_version = self.fetch_latest_version("pip", name).await.ok();
+        
+        // 检查安全漏洞
+        let security_alerts = self.check_security_vulnerabilities("pip", name, version).await?;
+
+        Ok(DependencyInfo {
+            name: name.to_string(),
+            current_version: version.to_string(),
+            latest_version,
+            release_date: None,
+            security_alerts,
+            dependency_type: dep_type.to_string(),
+            source: source.to_string(),
+        })
+    }
+
+    async fn parse_pom_xml(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let content = tokio::fs::read_to_string(file_path).await?;
+        let doc = roxmltree::Document::parse(&content)?;
+        
+        let mut dependencies = Vec::new();
+        
+        // 查找所有 <dependency> 节点
+        for node in doc.descendants() {
+            if node.tag_name().name() == "dependency" {
+                let mut group_id = String::new();
+                let mut artifact_id = String::new();
+                let mut version = String::new();
+                let mut scope = "compile".to_string();
+                
+                for child in node.children() {
+                    match child.tag_name().name() {
+                        "groupId" => group_id = child.text().unwrap_or("").to_string(),
+                        "artifactId" => artifact_id = child.text().unwrap_or("").to_string(),
+                        "version" => version = child.text().unwrap_or("").to_string(),
+                        "scope" => scope = child.text().unwrap_or("compile").to_string(),
+                        _ => {}
+                    }
+                }
+                
+                if !group_id.is_empty() && !artifact_id.is_empty() {
+                    let name = format!("{}:{}", group_id, artifact_id);
+                    let dep_info = self.parse_maven_dependency(&name, &version, &scope, "maven").await?;
+                    dependencies.push(dep_info);
+                }
+            }
+        }
+        
+        Ok(dependencies)
+    }
+
+    async fn parse_maven_dependency(&self, name: &str, version: &str, dep_type: &str, source: &str) -> Result<DependencyInfo> {
+        // 获取最新版本信息
+        let latest_version = self.fetch_latest_version("maven", name).await.ok();
+        
+        // 检查安全漏洞
+        let security_alerts = self.check_security_vulnerabilities("maven", name, version).await?;
+
+        Ok(DependencyInfo {
+            name: name.to_string(),
+            current_version: version.to_string(),
+            latest_version,
+            release_date: None,
+            security_alerts,
+            dependency_type: dep_type.to_string(),
+            source: source.to_string(),
+        })
+    }
+
+    async fn parse_go_mod(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let content = tokio::fs::read_to_string(file_path).await?;
+        let mut dependencies = Vec::new();
+        
+        // 简单的 go.mod 解析
+        let re = Regex::new(r"^\s*([^\s]+)\s+v([0-9.]+.*?)(?:\s|$)")?;
+        let mut in_require_block = false;
+        
+        for line in content.lines() {
+            let line = line.trim();
+            
+            if line.starts_with("require (") {
+                in_require_block = true;
+                continue;
+            }
+            
+            if line == ")" && in_require_block {
+                in_require_block = false;
+                continue;
+            }
+            
+            if line.starts_with("require ") || in_require_block {
+                let search_line = if line.starts_with("require ") {
+                    &line[8..]
+                } else {
+                    line
+                };
+                
+                if let Some(caps) = re.captures(search_line) {
+                    let name = caps.get(1).unwrap().as_str();
+                    let version = caps.get(2).unwrap().as_str();
+                    
+                    let dep_info = self.parse_go_dependency(name, version, "direct", "go").await?;
+                    dependencies.push(dep_info);
+                }
+            }
+        }
+        
+        Ok(dependencies)
+    }
+
+    async fn parse_go_dependency(&self, name: &str, version: &str, dep_type: &str, source: &str) -> Result<DependencyInfo> {
+        // 获取最新版本信息
+        let latest_version = self.fetch_latest_version("go", name).await.ok();
+        
+        // 检查安全漏洞
+        let security_alerts = self.check_security_vulnerabilities("go", name, version).await?;
+
+        Ok(DependencyInfo {
+            name: name.to_string(),
+            current_version: version.to_string(),
+            latest_version,
+            release_date: None,
+            security_alerts,
+            dependency_type: dep_type.to_string(),
+            source: source.to_string(),
+        })
+    }
+
+    async fn parse_pubspec_yaml(&self, file_path: &str) -> Result<Vec<DependencyInfo>> {
+        let content = tokio::fs::read_to_string(file_path).await?;
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&content)?;
+        
+        let mut dependencies = Vec::new();
+        
+        // 解析 dependencies
+        if let Some(deps) = parsed.get("dependencies").and_then(|v| v.as_mapping()) {
+            for (name, version) in deps {
+                if let (Some(name_str), Some(version_str)) = (name.as_str(), version.as_str()) {
+                    let dep_info = self.parse_dart_dependency(name_str, version_str, "direct", "pub").await?;
+                    dependencies.push(dep_info);
+                }
+            }
+        }
+        
+        // 解析 dev_dependencies
+        if let Some(dev_deps) = parsed.get("dev_dependencies").and_then(|v| v.as_mapping()) {
+            for (name, version) in dev_deps {
+                if let (Some(name_str), Some(version_str)) = (name.as_str(), version.as_str()) {
+                    let dep_info = self.parse_dart_dependency(name_str, version_str, "dev", "pub").await?;
+                    dependencies.push(dep_info);
+                }
+            }
+        }
+        
+        Ok(dependencies)
+    }
+
+    async fn parse_dart_dependency(&self, name: &str, version: &str, dep_type: &str, source: &str) -> Result<DependencyInfo> {
+        // 清理版本号
+        let clean_version = version.trim_start_matches(&['^', '~', '>', '=', ' '][..]).to_string();
+        
+        // 获取最新版本信息
+        let latest_version = self.fetch_latest_version("pub", name).await.ok();
+        
+        // 检查安全漏洞
+        let security_alerts = self.check_security_vulnerabilities("pub", name, &clean_version).await?;
+
+        Ok(DependencyInfo {
+            name: name.to_string(),
+            current_version: clean_version,
+            latest_version,
+            release_date: None,
+            security_alerts,
+            dependency_type: dep_type.to_string(),
+            source: source.to_string(),
+        })
+    }
+
+    // 获取最新版本信息
+    async fn fetch_latest_version(&self, package_type: &str, name: &str) -> Result<String> {
+        let url = match package_type {
+            "cargo" => format!("https://crates.io/api/v1/crates/{}", name),
+            "npm" => format!("https://registry.npmjs.org/{}", name),
+            "pip" => format!("https://pypi.org/pypi/{}/json", name),
+            "maven" => format!("https://search.maven.org/solrsearch/select?q=a:\"{}\"&core=gav&rows=1&wt=json", name),
+            "go" => format!("https://proxy.golang.org/{}/@v/list", name),
+            "pub" => format!("https://pub.dev/api/packages/{}", name),
+            _ => return Err(anyhow::anyhow!("不支持的包类型: {}", package_type)),
+        };
+
+        let response = self.client.get(&url).send().await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("获取版本信息失败: {}", response.status()));
+        }
+
+        let version = match package_type {
+            "go" => {
+                let text = response.text().await?;
+                text.lines().last().unwrap_or("unknown").to_string()
+            },
+            _ => {
+                let data: Value = response.json().await?;
+                match package_type {
+                    "cargo" => data["crate"]["max_stable_version"].as_str().unwrap_or("unknown"),
+                    "npm" => data["dist-tags"]["latest"].as_str().unwrap_or("unknown"),
+                    "pip" => data["info"]["version"].as_str().unwrap_or("unknown"),
+                    "maven" => {
+                        data["response"]["docs"]
+                            .as_array()
+                            .and_then(|docs| docs.first())
+                            .and_then(|doc| doc["v"].as_str())
+                            .unwrap_or("unknown")
+                    },
+                    "pub" => data["latest"]["version"].as_str().unwrap_or("unknown"),
+                    _ => "unknown",
+                }.to_string()
+            }
+        };
+
+        Ok(version.to_string())
+    }
+
+    // 检查安全漏洞
+    async fn check_security_vulnerabilities(&self, _package_type: &str, name: &str, version: &str) -> Result<Vec<String>> {
+        // 这里可以集成真实的安全漏洞数据库
+        // 目前返回模拟数据
+        let mut alerts = Vec::new();
+        
+        // 模拟一些已知的安全漏洞
+        if name == "lodash" && version.starts_with("4.17.") && version < "4.17.21" {
+            alerts.push("CVE-2021-23337: Command injection vulnerability".to_string());
+        }
+        
+        if name == "requests" && version.starts_with("2.") && version < "2.31.0" {
+            alerts.push("CVE-2023-32681: Proxy-Authorization header leak".to_string());
+        }
+        
+        Ok(alerts)
     }
 }
 
@@ -117,7 +497,7 @@ impl MCPTool for AnalyzeDependenciesTool {
     }
 
     fn description(&self) -> &str {
-        "当LLM需要了解项目的依赖关系、包的兼容性或依赖安全状况时，使用此工具分析指定项目的依赖信息，包括依赖版本、更新状态、安全漏洞和兼容性检查。"
+        "在需要了解项目的依赖关系、包的兼容性或依赖安全状况时，分析指定项目的依赖信息，包括依赖版本、更新状态、安全漏洞和兼容性检查。"
     }
 
     fn parameters_schema(&self) -> &Schema {
@@ -128,7 +508,17 @@ impl MCPTool for AnalyzeDependenciesTool {
                 properties: {
                     let mut map = HashMap::new();                    map.insert("language".to_string(), Schema::String(SchemaString {
                         description: Some("项目所使用的编程语言".to_string()),
-                        enum_values: Some(vec!["rust".to_string(), "python".to_string(), "javascript".to_string()]),
+                        enum_values: Some(vec![
+                            "rust".to_string(), 
+                            "python".to_string(), 
+                            "javascript".to_string(),
+                            "typescript".to_string(),
+                            "node".to_string(),
+                            "java".to_string(),
+                            "go".to_string(),
+                            "dart".to_string(),
+                            "flutter".to_string()
+                        ]),
                     }));
                     map.insert("files".to_string(), Schema::Array(SchemaArray {
                         description: Some("要分析的依赖文件路径列表".to_string()),
@@ -172,15 +562,16 @@ impl MCPTool for AnalyzeDependenciesTool {
             let deps = self.parse_dependency_file(language, file_path).await?;
 
             // 检查每个依赖的信息
-            for (name, current_version) in deps {
-                let info = self.check_dependency(&name, &current_version).await?;
-
+            for dep in deps {
                 all_deps.push(json!({
-                    "name": info.name,
-                    "current_version": info.current_version,
-                    "latest_version": info.latest_version,
-                    "is_outdated": info.current_version != info.latest_version,
-                    "security_alerts": info.security_alerts
+                    "name": dep.name,
+                    "current_version": dep.current_version,
+                    "latest_version": dep.latest_version,
+                    "release_date": dep.release_date.map(|d| d.to_rfc3339()),
+                    "security_alerts": dep.security_alerts,
+                    "dependency_type": dep.dependency_type,
+                    "source": dep.source,
+                    "update_needed": dep.latest_version.as_ref().map_or(false, |latest| &dep.current_version != latest),
                 }));
             }
         }

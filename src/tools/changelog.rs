@@ -25,7 +25,7 @@ impl MCPTool for GetChangelogTool {
     }
     
     fn description(&self) -> &'static str {
-        "当LLM需要了解包的版本更新内容、新增功能或破坏性变更时，使用此工具获取指定包的变更日志，包括版本历史、更新说明、新功能介绍和升级注意事项。"
+        "在需要了解包的版本更新内容、新增功能或破坏性变更时，获取指定包的变更日志，包括版本历史、更新说明、新功能介绍和升级注意事项。"
     }
     
     fn parameters_schema(&self) -> &Schema {
@@ -240,7 +240,7 @@ impl MCPTool for CompareVersionsTool {
     }
     
     fn description(&self) -> &'static str {
-        "当LLM需要了解包的两个版本之间的差异、升级影响或版本选择建议时，使用此工具比较指定包的两个版本，包括功能变更、破坏性改动、新增特性和升级建议。"
+        "在需要了解包的两个版本之间的差异、升级影响或版本选择建议时，比较指定包的两个版本，包括功能变更、破坏性改动、新增特性和升级建议。"
     }
     
     fn parameters_schema(&self) -> &Schema {

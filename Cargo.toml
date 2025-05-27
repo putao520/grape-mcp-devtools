@@ -67,6 +67,25 @@ futures = "0.3"
 salvo = { version = "0.68", features = ["cors", "serve-static"] }
 quick-xml = "0.37.5"
 pulldown-cmark = "0.13.0"
+# XML 解析 (用于 Maven pom.xml)
+roxmltree = "0.19.0"
+# 安全漏洞数据库
+rustsec = "0.29.1"
+# 更好的错误处理
+color-eyre = "0.6.2"
+# 字符串相似度比较
+strsim = "0.11.0"
+# 代码分析工具
+tree-sitter = "0.20.10"
+tree-sitter-rust = "0.20.4"
+tree-sitter-python = "0.20.4"
+tree-sitter-javascript = "0.20.1"
+tree-sitter-typescript = "0.20.2"
+# 更好的 HTTP 客户端功能
+reqwest-middleware = "0.2.4"
+reqwest-retry = "0.4.0"
+# Base64 编码
+base64 = "0.21.7"
 
 [dev-dependencies]
 tokio-test = "0.4.2"
@@ -74,3 +93,5 @@ async-trait = "0.1.77"
 scraper = "0.18.1"
 serde_yaml = "0.9.32"
 walkdir = "2.5.0"
+
+

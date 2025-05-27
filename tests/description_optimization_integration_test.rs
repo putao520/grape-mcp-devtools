@@ -9,8 +9,8 @@ use grape_mcp_devtools::tools::changelog::{GetChangelogTool, CompareVersionsTool
 use grape_mcp_devtools::tools::analysis::{AnalyzeCodeTool, SuggestRefactoringTool};
 
 #[test]
-fn test_all_tools_use_llm_context_descriptions() {
-    // 测试所有工具描述都以"当LLM需要"开头，符合新的描述模式
+fn test_all_tools_use_generalized_descriptions() {
+    // 测试所有工具描述都以"在需要"开头，符合新的泛化描述模式
     let tools: Vec<Box<dyn MCPTool>> = vec![
         Box::new(PythonDocsTool::new()),
         Box::new(JavaScriptDocsTool::new()),
@@ -27,8 +27,8 @@ fn test_all_tools_use_llm_context_descriptions() {
     for tool in tools {
         let description = tool.description();
         assert!(
-            description.starts_with("当LLM需要"),
-            "工具 {} 的描述应该以'当LLM需要'开头，实际描述: {}",
+            description.starts_with("在需要"),
+            "工具 {} 的描述应该以'在需要'开头，实际描述: {}",
             tool.name(),
             description
         );
@@ -63,7 +63,7 @@ fn test_core_tools_contain_package_keywords() {
 
 #[test]
 fn test_no_old_style_user_patterns() {
-    // 测试确保没有旧式的"当用户..."描述模式
+    // 测试确保没有旧式的描述模式
     let tools: Vec<Box<dyn MCPTool>> = vec![
         Box::new(PythonDocsTool::new()),
         Box::new(JavaScriptDocsTool::new()),
@@ -83,6 +83,8 @@ fn test_no_old_style_user_patterns() {
         "当用户觉得",
         "当用户的代码",
         "当用户想要",
+        "当LLM需要",
+        "使用此工具",
     ];
 
     for tool in tools {

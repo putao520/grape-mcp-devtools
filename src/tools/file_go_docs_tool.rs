@@ -358,7 +358,7 @@ impl MCPTool for FileGoDocsTool {
     }
 
     fn description(&self) -> &str {
-        "当LLM需要了解Go包的功能、使用方法、API文档或代码示例时，使用此工具获取指定Go包的详细信息，包括安装方法、导入方式、函数说明、类型定义和实际使用示例。"
+        "在需要了解Go包的功能、使用方法、API文档或代码示例时，获取指定Go包的详细信息，包括安装方法、导入方式、函数说明、类型定义和实际使用示例。"
     }
 
     fn parameters_schema(&self) -> &Schema {
