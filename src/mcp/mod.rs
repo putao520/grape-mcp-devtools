@@ -15,6 +15,8 @@ pub const SERVER_CAPABILITIES: &[&str] = &[
 /// MCP 请求
 #[derive(Debug, Deserialize)]
 pub struct Request {
+    /// JSON-RPC 版本
+    pub jsonrpc: String,
     /// 协议版本号
     pub version: String,
     /// 请求 ID
@@ -28,6 +30,8 @@ pub struct Request {
 /// MCP 响应
 #[derive(Debug, Serialize)]
 pub struct Response {
+    /// JSON-RPC 版本
+    pub jsonrpc: String,
     /// 协议版本号
     pub version: String,
     /// 请求 ID
@@ -81,6 +85,7 @@ impl Response {
     /// 创建一个成功响应
     pub fn success(id: String, result: serde_json::Value) -> Self {
         Self {
+            jsonrpc: "2.0".to_string(),
             version: MCP_VERSION.to_string(),
             id,
             result: Some(result),
@@ -91,6 +96,7 @@ impl Response {
     /// 创建一个错误响应
     pub fn error(id: String, code: i32, message: String) -> Self {
         Self {
+            jsonrpc: "2.0".to_string(),
             version: MCP_VERSION.to_string(),
             id,
             result: None,
@@ -146,5 +152,3 @@ mod tests {
 pub mod server;
 pub mod protocol;
 
-pub use server::MCPServer;
-pub use protocol::{MCPRequest, MCPResponse};

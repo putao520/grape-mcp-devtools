@@ -1,4 +1,11 @@
-use crate::tools::*;
+use crate::tools::{
+    SearchDocsTool,
+    dependencies::AnalyzeDependenciesTool,
+    api_docs::GetApiDocsTool,
+    analysis::{AnalyzeCodeTool, SuggestRefactoringTool},
+    versioning::CheckVersionTool,
+    base::MCPTool,
+};
 use crate::errors::Result;
 use serde_json::json;
 use std::time::Duration;
@@ -8,7 +15,7 @@ use tokio::time::timeout;
 async fn test_rust_docs_search() -> Result<()> {
     println!("🦀 测试Rust文档搜索功能");
     
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     
     // 测试搜索Rust标准库文档
     let params = json!({
@@ -154,7 +161,7 @@ impl UserRepository {
             match result {
                 Ok(analysis) => {
                     println!("✅ Rust代码分析成功: {}", analysis);
-                    assert!(analysis["metrics"].is_object());
+                    assert!(analysis["analysis"].is_object());
                     assert!(analysis["suggestions"].as_array().is_some());
                 },
                 Err(e) => {
@@ -204,7 +211,7 @@ fn process_numbers(numbers: Vec<i32>) -> Vec<i32> {
             match result {
                 Ok(suggestions) => {
                     println!("✅ Rust重构建议成功: {}", suggestions);
-                    assert!(suggestions["suggestions"].as_array().is_some());
+                    assert!(suggestions["refactoring_suggestions"].as_array().is_some());
                 },
                 Err(e) => {
                     println!("❌ Rust重构建议失败: {}", e);
@@ -253,38 +260,6 @@ async fn test_rust_api_docs() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_rust_changelog() -> Result<()> {
-    println!("📝 测试Rust变更日志功能");
-    
-    let changelog_tool = GetChangelogTool;
-    
-    let params = json!({
-        "package": "serde",
-        "language": "rust",
-        "version": "1.0.197"
-    });
-    
-    match timeout(Duration::from_secs(30), changelog_tool.execute(params)).await {
-        Ok(result) => {
-            match result {
-                Ok(changelog) => {
-                    println!("✅ Rust变更日志获取成功: {}", changelog);
-                    assert!(changelog["changes"].as_array().is_some());
-                },
-                Err(e) => {
-                    println!("❌ Rust变更日志获取失败: {}", e);
-                }
-            }
-        },
-        Err(_) => {
-            println!("⏰ Rust变更日志获取超时，继续下一个测试");
-        }
-    }
-    
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_rust_version_check() -> Result<()> {
     println!("🔢 测试Rust版本检查功能");
     
@@ -323,7 +298,7 @@ async fn test_rust_integration_workflow() -> Result<()> {
     
     // 1. 搜索Rust标准库文档
     println!("步骤1: 搜索Rust标准库文档");
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     let search_params = json!({
         "query": "HashMap insert",
         "language": "rust",

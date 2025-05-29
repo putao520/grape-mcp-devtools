@@ -91,7 +91,7 @@ struct OSVReference {
 }
 
 pub struct SecurityCheckTool {
-    annotations: ToolAnnotations,
+    _annotations: ToolAnnotations,
     cache: Arc<RwLock<HashMap<String, (Vec<SecurityVulnerability>, DateTime<Utc>)>>>,
     client: reqwest::Client,
 }
@@ -99,7 +99,7 @@ pub struct SecurityCheckTool {
 impl SecurityCheckTool {
     pub fn new() -> Self {
         Self {
-            annotations: ToolAnnotations {
+            _annotations: ToolAnnotations {
                 category: "安全检查".to_string(),
                 tags: vec!["安全".to_string(), "漏洞".to_string(), "CVE".to_string()],
                 version: "1.0".to_string(),
@@ -197,29 +197,47 @@ impl SecurityCheckTool {
     async fn check_package_security(&self, ecosystem: &str, package: &str, version: Option<&str>) -> Result<Vec<SecurityVulnerability>> {
         let mut all_vulnerabilities = Vec::new();
 
+        tracing::info!("开始安全检查: {}/{} (版本: {})", ecosystem, package, version.unwrap_or("latest"));
+
         // 查询OSV数据库
         match self.query_osv_database(ecosystem, package, version).await {
-            Ok(mut vulns) => all_vulnerabilities.append(&mut vulns),
-            Err(e) => tracing::warn!("OSV查询失败: {}", e),
+            Ok(mut vulns) => {
+                tracing::debug!("OSV数据库返回 {} 个漏洞", vulns.len());
+                all_vulnerabilities.append(&mut vulns);
+            },
+            Err(e) => tracing::warn!("OSV查询失败 {}/{}: {}", ecosystem, package, e),
         }
 
         // 查询GitHub Advisory Database
         match self.query_github_advisory(ecosystem, package).await {
-            Ok(mut vulns) => all_vulnerabilities.append(&mut vulns),
-            Err(e) => tracing::warn!("GitHub Advisory查询失败: {}", e),
+            Ok(mut vulns) => {
+                tracing::debug!("GitHub Advisory返回 {} 个漏洞", vulns.len());
+                all_vulnerabilities.append(&mut vulns);
+            },
+            Err(e) => tracing::warn!("GitHub Advisory查询失败 {}/{}: {}", ecosystem, package, e),
         }
 
         // 对于Rust包，额外查询RustSec
         if ecosystem == "cargo" || ecosystem == "rust" {
             match self.query_rustsec_database(package).await {
-                Ok(mut vulns) => all_vulnerabilities.append(&mut vulns),
-                Err(e) => tracing::warn!("RustSec查询失败: {}", e),
+                Ok(mut vulns) => {
+                    tracing::debug!("RustSec返回 {} 个漏洞", vulns.len());
+                    all_vulnerabilities.append(&mut vulns);
+                },
+                Err(e) => tracing::warn!("RustSec查询失败 {}: {}", package, e),
             }
         }
 
         // 去重（基于ID）
+        let original_count = all_vulnerabilities.len();
         all_vulnerabilities.sort_by(|a, b| a.id.cmp(&b.id));
         all_vulnerabilities.dedup_by(|a, b| a.id == b.id);
+        
+        if original_count != all_vulnerabilities.len() {
+            tracing::debug!("去重后漏洞数量: {} -> {}", original_count, all_vulnerabilities.len());
+        }
+
+        tracing::info!("安全检查完成: {}/{} 发现 {} 个漏洞", ecosystem, package, all_vulnerabilities.len());
 
         Ok(all_vulnerabilities)
     }

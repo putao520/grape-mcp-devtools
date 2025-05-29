@@ -5,7 +5,6 @@ use grape_mcp_devtools::tools::typescript_docs_tool::TypeScriptDocsTool;
 use grape_mcp_devtools::tools::versioning::CheckVersionTool;
 use grape_mcp_devtools::tools::search::SearchDocsTools;
 use grape_mcp_devtools::tools::dependencies::AnalyzeDependenciesTool;
-use grape_mcp_devtools::tools::changelog::{GetChangelogTool, CompareVersionsTool};
 use grape_mcp_devtools::tools::analysis::{AnalyzeCodeTool, SuggestRefactoringTool};
 
 #[test]
@@ -18,8 +17,6 @@ fn test_all_tools_use_generalized_descriptions() {
         Box::new(CheckVersionTool::new()),
         Box::new(SearchDocsTools::new()),
         Box::new(AnalyzeDependenciesTool::new()),
-        Box::new(GetChangelogTool::new()),
-        Box::new(CompareVersionsTool::new()),
         Box::new(AnalyzeCodeTool),
         Box::new(SuggestRefactoringTool),
     ];
@@ -43,8 +40,6 @@ fn test_core_tools_contain_package_keywords() {
         (Box::new(JavaScriptDocsTool::new()), vec!["JavaScript", "包", "功能", "安装配置"]),
         (Box::new(TypeScriptDocsTool::new()), vec!["TypeScript包", "类型定义", "使用方法"]),
         (Box::new(CheckVersionTool::new()), vec!["包", "版本", "最新版本", "版本历史"]),
-        (Box::new(GetChangelogTool::new()), vec!["包", "版本更新", "变更日志"]),
-        (Box::new(CompareVersionsTool::new()), vec!["包", "版本", "差异", "升级"]),
     ];
 
     for (tool, keywords) in core_tools {
@@ -71,8 +66,6 @@ fn test_no_old_style_user_patterns() {
         Box::new(CheckVersionTool::new()),
         Box::new(SearchDocsTools::new()),
         Box::new(AnalyzeDependenciesTool::new()),
-        Box::new(GetChangelogTool::new()),
-        Box::new(CompareVersionsTool::new()),
         Box::new(AnalyzeCodeTool),
         Box::new(SuggestRefactoringTool),
     ];
@@ -115,8 +108,6 @@ fn test_descriptions_contain_action_keywords() {
         Box::new(CheckVersionTool::new()),
         Box::new(SearchDocsTools::new()),
         Box::new(AnalyzeDependenciesTool::new()),
-        Box::new(GetChangelogTool::new()),
-        Box::new(CompareVersionsTool::new()),
         Box::new(AnalyzeCodeTool),
         Box::new(SuggestRefactoringTool),
     ];
@@ -145,8 +136,6 @@ fn test_description_length_is_appropriate() {
         Box::new(CheckVersionTool::new()),
         Box::new(SearchDocsTools::new()),
         Box::new(AnalyzeDependenciesTool::new()),
-        Box::new(GetChangelogTool::new()),
-        Box::new(CompareVersionsTool::new()),
         Box::new(AnalyzeCodeTool),
         Box::new(SuggestRefactoringTool),
     ];

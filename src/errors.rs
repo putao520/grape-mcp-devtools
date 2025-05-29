@@ -47,6 +47,12 @@ pub enum MCPError {
 
     #[error("文档生成错误: {0}")]
     DocumentationError(String),
+
+    #[error("工具执行失败: {0}")]
+    ToolExecutionFailed(String),
+
+    #[error("工具未找到: {0}")]
+    ToolNotFound(String),
 }
 
 #[derive(Error, Debug)]
@@ -93,6 +99,8 @@ impl MCPError {
             MCPError::VersionCompareError(_) => "VERSION_COMPARE_ERROR",
             MCPError::CompatibilityCheckError(_) => "COMPATIBILITY_CHECK_ERROR",
             MCPError::DocumentationError(_) => "DOCUMENTATION_ERROR",
+            MCPError::ToolExecutionFailed(_) => "TOOL_EXECUTION_FAILED",
+            MCPError::ToolNotFound(_) => "TOOL_NOT_FOUND",
         }
     }
 
@@ -112,6 +120,8 @@ impl MCPError {
             MCPError::VersionCompareError(_) => "版本比较失败，请确保两个版本都存在且格式正确",
             MCPError::CompatibilityCheckError(_) => "API兼容性检查失败，请检查版本信息",
             MCPError::DocumentationError(_) => "文档生成失败，请检查源文件和配置",
+            MCPError::ToolExecutionFailed(_) => "工具执行失败，请检查工具和配置",
+            MCPError::ToolNotFound(_) => "工具未找到，请检查工具路径和名称",
         }
     }
 
@@ -124,6 +134,8 @@ impl MCPError {
             MCPError::VersionCompareError(msg) => format!("版本比较失败: {}\n请确保指定的版本存在于项目的发布历史中", msg),
             MCPError::CompatibilityCheckError(msg) => format!("兼容性检查失败: {}\n建议查看语言或框架的官方兼容性指南", msg),
             MCPError::DocumentationError(msg) => format!("文档生成失败: {}\n请检查文档源文件的格式和必要的工具是否正确安装", msg),
+            MCPError::ToolExecutionFailed(msg) => format!("工具执行失败: {}\n请检查工具和配置", msg),
+            MCPError::ToolNotFound(msg) => format!("工具未找到: {}\n请检查工具路径和名称", msg),
             _ => self.to_string(),
         }
     }

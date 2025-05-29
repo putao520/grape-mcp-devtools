@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use anyhow::Result;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 use crate::tools::base::{MCPTool, Schema, SchemaObject, SchemaString};
 use crate::errors::MCPError;

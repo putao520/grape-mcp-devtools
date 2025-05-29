@@ -1,4 +1,11 @@
-use crate::tools::*;
+use crate::tools::{
+    python_docs_tool::PythonDocsTool,
+    javascript_docs_tool::JavaScriptDocsTool,
+    SearchDocsTool,
+    analysis::AnalyzeCodeTool,
+    dependencies::AnalyzeDependenciesTool,
+    base::MCPTool,
+};
 use crate::errors::Result;
 use serde_json::json;
 use std::time::Duration;
@@ -135,7 +142,7 @@ async fn test_typescript_types_tool() -> Result<()> {
 async fn test_multi_language_integration() -> Result<()> {
     println!("🌐 测试多语言文档搜索集成");
     
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     
     // 测试Python搜索
     let python_params = json!({
@@ -207,7 +214,7 @@ class UserManager:
     
     if let Ok(Ok(python_analysis)) = timeout(Duration::from_secs(30), analysis_tool.execute(python_params)).await {
         println!("✅ Python代码分析完成");
-        assert!(python_analysis["metrics"].is_object());
+        assert!(python_analysis["analysis"].is_object());
         println!("📊 Python分析结果: {}", python_analysis);
     } else {
         println!("⚠️ Python代码分析跳过");
@@ -257,7 +264,7 @@ export { User, UserService };
     
     if let Ok(Ok(ts_analysis)) = timeout(Duration::from_secs(30), analysis_tool.execute(typescript_params)).await {
         println!("✅ TypeScript代码分析完成");
-        assert!(ts_analysis["metrics"].is_object());
+        assert!(ts_analysis["analysis"].is_object());
         println!("📊 TypeScript分析结果: {}", ts_analysis);
     } else {
         println!("⚠️ TypeScript代码分析跳过");
@@ -316,7 +323,7 @@ async fn test_complete_multi_language_workflow() -> Result<()> {
         "include_examples": true
     });
     
-    if let Ok(Ok(python_docs)) = timeout(Duration::from_secs(30), python_tool.execute(python_params)).await {
+    if let Ok(Ok(_python_docs)) = timeout(Duration::from_secs(30), python_tool.execute(python_params)).await {
         println!("✅ Python文档获取完成");
         
         // 分析Python代码
@@ -336,12 +343,10 @@ async fn test_complete_multi_language_workflow() -> Result<()> {
     // 2. JavaScript/TypeScript工作流程
     println!("\n步骤2: JavaScript/TypeScript工作流程");
     let js_tool = JavaScriptDocsTool::new();
-    let js_params = json!({
+    if let Ok(Ok(_js_docs)) = timeout(Duration::from_secs(30), js_tool.execute(json!({
         "package_name": "react",
         "include_examples": true
-    });
-    
-    if let Ok(Ok(js_docs)) = timeout(Duration::from_secs(30), js_tool.execute(js_params)).await {
+    }))).await {
         println!("✅ JavaScript文档获取完成");
         
         // 分析TypeScript代码
@@ -360,7 +365,7 @@ async fn test_complete_multi_language_workflow() -> Result<()> {
     
     // 3. 跨语言搜索
     println!("\n步骤3: 跨语言文档搜索");
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     let search_params = json!({
         "query": "web framework",
         "max_results": 10

@@ -1,4 +1,11 @@
-use crate::tools::*;
+use crate::tools::{
+    SearchDocsTool,
+    dependencies::AnalyzeDependenciesTool,
+    api_docs::GetApiDocsTool,
+    analysis::{AnalyzeCodeTool, SuggestRefactoringTool},
+    versioning::CheckVersionTool,
+    base::MCPTool,
+};
 use crate::errors::Result;
 use serde_json::json;
 use std::time::Duration;
@@ -8,7 +15,7 @@ use tokio::time::timeout;
 async fn test_python_docs_search() -> Result<()> {
     println!("🐍 测试Python文档搜索功能");
     
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     
     // 测试搜索Python标准库
     let params = json!({
@@ -159,7 +166,7 @@ class Calculator:
             match result {
                 Ok(analysis) => {
                     println!("✅ Python代码分析成功: {}", analysis);
-                    assert!(analysis["metrics"].is_object());
+                    assert!(analysis["analysis"].is_object());
                     assert!(analysis["suggestions"].as_array().is_some());
                 },
                 Err(e) => {
@@ -205,7 +212,7 @@ def process_data(data):
             match result {
                 Ok(suggestions) => {
                     println!("✅ Python重构建议成功: {}", suggestions);
-                    assert!(suggestions["suggestions"].as_array().is_some());
+                    assert!(suggestions["refactoring_suggestions"].as_array().is_some());
                 },
                 Err(e) => {
                     println!("❌ Python重构建议失败: {}", e);
@@ -214,38 +221,6 @@ def process_data(data):
         },
         Err(_) => {
             println!("⏰ Python重构建议超时，继续下一个测试");
-        }
-    }
-    
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_python_changelog() -> Result<()> {
-    println!("📝 测试Python变更日志功能");
-    
-    let changelog_tool = GetChangelogTool;
-    
-    let params = json!({
-        "package": "flask",
-        "language": "python",
-        "version": "3.0.0"
-    });
-    
-    match timeout(Duration::from_secs(30), changelog_tool.execute(params)).await {
-        Ok(result) => {
-            match result {
-                Ok(changelog) => {
-                    println!("✅ Python变更日志获取成功: {}", changelog);
-                    assert!(changelog["changes"].as_array().is_some());
-                },
-                Err(e) => {
-                    println!("❌ Python变更日志获取失败: {}", e);
-                }
-            }
-        },
-        Err(_) => {
-            println!("⏰ Python变更日志获取超时，继续下一个测试");
         }
     }
     
@@ -291,7 +266,7 @@ async fn test_python_integration_workflow() -> Result<()> {
     
     // 1. 搜索Python库文档
     println!("步骤1: 搜索requests库文档");
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     let search_params = json!({
         "query": "requests http",
         "language": "python",

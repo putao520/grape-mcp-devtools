@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use anyhow::Result;
 use crate::errors::MCPError;
 use super::base::{MCPTool, ToolAnnotations, Schema, SchemaObject, SchemaString, SchemaBoolean, SchemaArray};
+use super::security::SecurityCheckTool;
 use regex::Regex;
 use roxmltree;
 use serde::{Deserialize, Serialize};
@@ -49,22 +50,22 @@ struct PackageJsonDependencies {
 }
 
 pub struct AnalyzeDependenciesTool {
-    annotations: ToolAnnotations,
+    _annotations: ToolAnnotations,
     cache: Arc<RwLock<HashMap<String, (Vec<DependencyInfo>, DateTime<Utc>)>>>,
-    security_db: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    security_tool: SecurityCheckTool,
     client: reqwest::Client,
 }
 
 impl AnalyzeDependenciesTool {
     pub fn new() -> Self {
         Self {
-            annotations: ToolAnnotations {
+            _annotations: ToolAnnotations {
                 category: "依赖分析".to_string(),
                 tags: vec!["依赖".to_string(), "分析".to_string()],
                 version: "1.0".to_string(),
             },
             cache: Arc::new(RwLock::new(HashMap::new())),
-            security_db: Arc::new(RwLock::new(HashMap::new())),
+            security_tool: SecurityCheckTool::new(),
             client: reqwest::Client::new(),
         }
     }
@@ -471,22 +472,209 @@ impl AnalyzeDependenciesTool {
         Ok(version.to_string())
     }
 
-    // 检查安全漏洞
-    async fn check_security_vulnerabilities(&self, _package_type: &str, name: &str, version: &str) -> Result<Vec<String>> {
-        // 这里可以集成真实的安全漏洞数据库
-        // 目前返回模拟数据
-        let mut alerts = Vec::new();
-        
-        // 模拟一些已知的安全漏洞
-        if name == "lodash" && version.starts_with("4.17.") && version < "4.17.21" {
-            alerts.push("CVE-2021-23337: Command injection vulnerability".to_string());
+    // 改进的安全漏洞检查 - 使用真实的安全检查工具
+    async fn check_security_vulnerabilities(&self, package_type: &str, name: &str, version: &str) -> Result<Vec<String>> {
+        // 映射包类型到生态系统名称
+        let ecosystem = match package_type {
+            "cargo" => "cargo",
+            "npm" => "npm", 
+            "pip" => "pip",
+            "maven" => "maven",
+            "go" => "go",
+            "pub" => "pub",
+            _ => package_type,
+        };
+
+        // 构造安全检查参数
+        let security_params = json!({
+            "ecosystem": ecosystem,
+            "package": name,
+            "version": version,
+            "include_fixed": false // 只关注未修复的漏洞
+        });
+
+        // 调用安全检查工具
+        match self.security_tool.execute(security_params).await {
+            Ok(result) => {
+                let empty_vec = vec![];
+                let vulnerabilities = result["vulnerabilities"].as_array().unwrap_or(&empty_vec);
+                let alerts: Vec<String> = vulnerabilities.iter()
+                    .map(|vuln| {
+                        let id = vuln["id"].as_str().unwrap_or("unknown");
+                        let severity = vuln["severity"].as_str().unwrap_or("unknown");
+                        let summary = vuln["summary"].as_str().unwrap_or("无摘要");
+                        format!("{} ({}): {}", id, severity, summary)
+                    })
+                    .collect();
+                Ok(alerts)
+            },
+            Err(e) => {
+                tracing::warn!("安全漏洞检查失败 {}/{}: {}", ecosystem, name, e);
+                Ok(Vec::new()) // 失败时返回空列表，不阻断依赖分析
+            }
+        }
+    }
+
+    // 添加缓存机制
+    async fn get_cached_dependencies(&self, cache_key: &str) -> Option<Vec<DependencyInfo>> {
+        let cache = self.cache.read().await;
+        if let Some((deps, timestamp)) = cache.get(cache_key) {
+            let cache_ttl = chrono::Duration::hours(2); // 依赖信息缓存2小时
+            if Utc::now() - *timestamp < cache_ttl {
+                return Some(deps.clone());
+            }
+        }
+        None
+    }
+
+    async fn cache_dependencies(&self, cache_key: String, dependencies: Vec<DependencyInfo>) {
+        let mut cache = self.cache.write().await;
+        cache.insert(cache_key, (dependencies, Utc::now()));
+    }
+
+    // 添加参数验证方法
+    fn validate_params(&self, params: &Value) -> Result<()> {
+        if params["language"].as_str().is_none() {
+            return Err(MCPError::InvalidParameter("缺少language参数".to_string()).into());
         }
         
-        if name == "requests" && version.starts_with("2.") && version < "2.31.0" {
-            alerts.push("CVE-2023-32681: Proxy-Authorization header leak".to_string());
+        if params["files"].as_array().is_none() {
+            return Err(MCPError::InvalidParameter("缺少files参数或格式错误".to_string()).into());
         }
         
-        Ok(alerts)
+        Ok(())
+    }
+
+    // 执行依赖分析的内部方法
+    async fn execute_internal(&self, params: Value) -> Result<Value> {
+        // 验证参数
+        self.validate_params(&params)?;
+
+        // 提取参数
+        let language = params["language"]
+            .as_str()
+            .ok_or_else(|| MCPError::InvalidParameter("language 参数无效".into()))?;
+
+        let files = params["files"]
+            .as_array()
+            .ok_or_else(|| MCPError::InvalidParameter("files 参数必须是数组".into()))?;
+
+        let check_updates = params["check_updates"]
+            .as_bool()
+            .unwrap_or(true);
+
+        // 生成缓存键
+        let cache_key = format!("{}:{}", language, files.iter()
+            .filter_map(|f| f.as_str())
+            .collect::<Vec<_>>()
+            .join(","));
+
+        // 检查缓存
+        if let Some(cached_deps) = self.get_cached_dependencies(&cache_key).await {
+            tracing::debug!("从缓存返回依赖分析结果: {}", cache_key);
+            return Ok(self.format_dependency_result(cached_deps, language, check_updates));
+        }
+
+        let mut all_deps = Vec::new();
+        let mut analysis_errors = Vec::new();
+
+        // 处理每个依赖文件
+        for file in files {
+            let file_path = file.as_str()
+                .ok_or_else(|| MCPError::InvalidParameter("file 路径必须是字符串".into()))?;
+
+            tracing::info!("分析依赖文件: {}", file_path);
+
+            // 解析依赖文件
+            match self.parse_dependency_file(language, file_path).await {
+                Ok(deps) => {
+                    tracing::info!("成功解析 {} 个依赖项从文件: {}", deps.len(), file_path);
+                    all_deps.extend(deps);
+                },
+                Err(e) => {
+                    let error_msg = format!("解析文件 {} 失败: {}", file_path, e);
+                    tracing::warn!("{}", error_msg);
+                    analysis_errors.push(error_msg);
+                }
+            }
+        }
+
+        // 缓存结果
+        if !all_deps.is_empty() {
+            self.cache_dependencies(cache_key, all_deps.clone()).await;
+        }
+
+        Ok(self.format_dependency_result_with_errors(all_deps, language, check_updates, analysis_errors))
+    }
+
+    // 格式化依赖分析结果
+    fn format_dependency_result(&self, dependencies: Vec<DependencyInfo>, language: &str, check_updates: bool) -> Value {
+        self.format_dependency_result_with_errors(dependencies, language, check_updates, Vec::new())
+    }
+
+    // 格式化依赖分析结果（包含错误信息）
+    fn format_dependency_result_with_errors(&self, dependencies: Vec<DependencyInfo>, language: &str, check_updates: bool, errors: Vec<String>) -> Value {
+        let formatted_deps: Vec<Value> = dependencies.iter().map(|dep| {
+            let update_needed = if check_updates {
+                dep.latest_version.as_ref().map_or(false, |latest| &dep.current_version != latest)
+            } else {
+                false
+            };
+
+            let security_risk_level = if dep.security_alerts.is_empty() {
+                "NONE"
+            } else if dep.security_alerts.iter().any(|alert| alert.contains("CRITICAL")) {
+                "CRITICAL"
+            } else if dep.security_alerts.iter().any(|alert| alert.contains("HIGH")) {
+                "HIGH"
+            } else if dep.security_alerts.iter().any(|alert| alert.contains("MEDIUM")) {
+                "MEDIUM"
+            } else {
+                "LOW"
+            };
+
+            json!({
+                "name": dep.name,
+                "current_version": dep.current_version,
+                "latest_version": dep.latest_version,
+                "release_date": dep.release_date.map(|d| d.to_rfc3339()),
+                "security_alerts": dep.security_alerts,
+                "security_risk_level": security_risk_level,
+                "dependency_type": dep.dependency_type,
+                "source": dep.source,
+                "update_needed": update_needed,
+                "update_available": dep.latest_version.is_some() && update_needed,
+            })
+        }).collect();
+
+        // 统计信息
+        let total_deps = dependencies.len();
+        let security_issues = dependencies.iter().filter(|d| !d.security_alerts.is_empty()).count();
+        let updates_available = if check_updates {
+            dependencies.iter().filter(|d| {
+                d.latest_version.as_ref().map_or(false, |latest| &d.current_version != latest)
+            }).count()
+        } else {
+            0
+        };
+
+        let mut result = json!({
+            "language": language,
+            "dependencies": formatted_deps,
+            "summary": {
+                "total_dependencies": total_deps,
+                "security_issues": security_issues,
+                "updates_available": updates_available,
+                "analysis_timestamp": Utc::now().to_rfc3339()
+            }
+        });
+
+        // 如果有错误，添加错误信息
+        if !errors.is_empty() {
+            result["errors"] = json!(errors);
+        }
+
+        result
     }
 }
 
@@ -535,49 +723,6 @@ impl MCPTool for AnalyzeDependenciesTool {
     }
 
     async fn execute(&self, params: Value) -> Result<Value> {
-        // 验证参数
-        self.validate_params(&params)?;
-
-        // 提取参数
-        let language = params["language"]
-            .as_str()
-            .ok_or_else(|| MCPError::InvalidParameter("language 参数无效".into()))?;
-
-        let files = params["files"]
-            .as_array()
-            .ok_or_else(|| MCPError::InvalidParameter("files 参数必须是数组".into()))?;
-
-        let _check_updates = params["check_updates"]
-            .as_bool()
-            .unwrap_or(true);
-
-        let mut all_deps = Vec::new();
-
-        // 处理每个依赖文件
-        for file in files {
-            let file_path = file.as_str()
-                .ok_or_else(|| MCPError::InvalidParameter("file 路径必须是字符串".into()))?;
-
-            // 解析依赖文件
-            let deps = self.parse_dependency_file(language, file_path).await?;
-
-            // 检查每个依赖的信息
-            for dep in deps {
-                all_deps.push(json!({
-                    "name": dep.name,
-                    "current_version": dep.current_version,
-                    "latest_version": dep.latest_version,
-                    "release_date": dep.release_date.map(|d| d.to_rfc3339()),
-                    "security_alerts": dep.security_alerts,
-                    "dependency_type": dep.dependency_type,
-                    "source": dep.source,
-                    "update_needed": dep.latest_version.as_ref().map_or(false, |latest| &dep.current_version != latest),
-                }));
-            }
-        }
-
-        Ok(json!({
-            "dependencies": all_deps
-        }))
+        self.execute_internal(params).await
     }
 }

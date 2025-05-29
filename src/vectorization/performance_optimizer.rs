@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore};
 use anyhow::Result;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 use moka::future::Cache;
 
 use crate::tools::base::{FileVectorizer, DocumentVector, FileDocumentFragment};
@@ -256,6 +256,7 @@ impl<T: FileVectorizer + Send + Sync + 'static> VectorizationPerformanceOptimize
             let mut metrics = self.metrics.write().await;
             metrics.batch_count += 1;
             metrics.total_processing_time_ms += duration.as_millis() as u64;
+            metrics.total_files_processed += fragments.len() as u64;
         }
 
         info!("批量向量化完成，耗时: {:?}", start_time.elapsed());
@@ -340,6 +341,11 @@ impl<T: FileVectorizer + Send + Sync + 'static> VectorizationPerformanceOptimize
         }
 
         debug!("自适应调整批量大小为: {}", self.config.batch_size);
+    }
+
+    /// 获取性能配置
+    pub async fn get_performance_config(&self) -> PerformanceConfig {
+        self.config.clone()
     }
 }
 

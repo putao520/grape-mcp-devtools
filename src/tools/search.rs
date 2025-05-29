@@ -5,55 +5,72 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use crate::errors::MCPError;
 use super::base::{MCPTool, ToolAnnotations, Schema, SchemaObject, SchemaString, SchemaNumber};
 
 pub struct SearchDocsTools {
-    annotations: ToolAnnotations,
-    cache: Arc<RwLock<HashMap<String, Value>>>,
+    _annotations: ToolAnnotations,
+    cache: Arc<RwLock<HashMap<String, (Value, DateTime<Utc>)>>>,
+    client: reqwest::Client,
 }
 
 impl SearchDocsTools {
     pub fn new() -> Self {
-        Self {            annotations: ToolAnnotations {
+        Self {            
+            _annotations: ToolAnnotations {
                 category: "文档搜索".to_string(),
                 tags: vec!["文档".to_string(), "搜索".to_string()],
                 version: "1.0".to_string(),
             },
             cache: Arc::new(RwLock::new(HashMap::new())),
+            client: reqwest::Client::new(),
         }
+    }
+    
+    fn validate_params(&self, params: &Value) -> Result<()> {
+        if params["query"].as_str().is_none() {
+            return Err(MCPError::InvalidParameter("缺少query参数".to_string()).into());
+        }
+        
+        if params["language"].as_str().is_none() {
+            return Err(MCPError::InvalidParameter("缺少language参数".to_string()).into());
+        }
+        
+        Ok(())
     }
     
     async fn search_or_get_cached(&self, query: &str, language: &str) -> Result<Value> {
         let cache_key = format!("{}:{}", language, query);
+        let cache_ttl = chrono::Duration::hours(1);
         
-        // 尝试从缓存获取
         {
             let cache = self.cache.read().await;
-            if let Some(cached) = cache.get(&cache_key) {
-                return Ok(cached.clone());
+            if let Some((cached_result, timestamp)) = cache.get(&cache_key) {
+                if Utc::now() - *timestamp < cache_ttl {
+                    tracing::debug!("从缓存返回搜索结果: {}", cache_key);
+                    return Ok(cached_result.clone());
+                }
             }
         }
         
-        // 执行实际搜索
         let results = self.perform_search(query, language).await?;
         
-        // 存入缓存
         {
             let mut cache = self.cache.write().await;
-            cache.insert(cache_key, results.clone());
+            cache.insert(cache_key, (results.clone(), Utc::now()));
         }
         
         Ok(results)
     }
     
     async fn perform_search(&self, query: &str, language: &str) -> Result<Value> {
-        // 实现实际的文档搜索逻辑
-        // 根据语言类型搜索不同的文档源
+        tracing::info!("执行文档搜索: {} (语言: {})", query, language);
+        
         let results = match language.to_lowercase().as_str() {
             "rust" => self.search_rust_docs(query).await?,
             "python" => self.search_python_docs(query).await?,
-            "javascript" | "js" => self.search_js_docs(query).await?,
+            "javascript" | "js" | "typescript" | "ts" => self.search_js_docs(query).await?,
             "go" => self.search_go_docs(query).await?,
             "java" => self.search_java_docs(query).await?,
             _ => self.search_generic_docs(query, language).await?,
@@ -63,117 +80,255 @@ impl SearchDocsTools {
     }
     
     async fn search_rust_docs(&self, query: &str) -> Result<Value> {
-        // 搜索 Rust 官方文档
-        let results = vec![
-            json!({
-                "title": format!("Rust std::{}", query),
-                "content": format!("Rust 标准库中的 {} 模块或函数", query),
-                "relevance": 0.9,
-                "source": "rust_std",
-                "url": format!("https://doc.rust-lang.org/std/?search={}", query)
-            }),
-            json!({
-                "title": format!("The Rust Book: {}", query),
-                "content": format!("Rust 编程语言书籍中关于 {} 的章节", query),
-                "relevance": 0.8,
-                "source": "rust_book",
-                "url": format!("https://doc.rust-lang.org/book/?search={}", query)
-            })
-        ];
+        let mut results = Vec::new();
+        
+        if let Ok(docs_rs_results) = self.search_docs_rs(query).await {
+            results.extend(docs_rs_results);
+        }
+        
+        if let Ok(std_results) = self.search_rust_std(query).await {
+            results.extend(std_results);
+        }
+        
+        if results.is_empty() {
+            results.push(json!({
+                "title": format!("Rust 文档搜索: {}", query),
+                "content": format!("在 Rust 官方文档中搜索 {}", query),
+                "relevance": 0.7,
+                "source": "rust_docs",
+                "url": format!("https://doc.rust-lang.org/std/?search={}", urlencoding::encode(query))
+            }));
+        }
         
         Ok(json!({
             "results": results,
-            "total_hits": results.len()
+            "total_hits": results.len(),
+            "language": "rust"
         }))
+    }
+    
+    async fn search_docs_rs(&self, query: &str) -> Result<Vec<Value>> {
+        let url = format!("https://docs.rs/releases/search?query={}", urlencoding::encode(query));
+        
+        match self.client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                if let Ok(data) = response.json::<Value>().await {
+                    let mut results = Vec::new();
+                    
+                    if let Some(releases) = data.as_array() {
+                        for release in releases.iter().take(5) {
+                            if let (Some(name), Some(description)) = (
+                                release["name"].as_str(),
+                                release["description"].as_str()
+                            ) {
+                                results.push(json!({
+                                    "title": format!("Rust crate: {}", name),
+                                    "content": description,
+                                    "relevance": 0.9,
+                                    "source": "docs.rs",
+                                    "url": format!("https://docs.rs/{}", name)
+                                }));
+                            }
+                        }
+                    }
+                    
+                    Ok(results)
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+            _ => Ok(Vec::new())
+        }
+    }
+    
+    async fn search_rust_std(&self, query: &str) -> Result<Vec<Value>> {
+        Ok(vec![
+            json!({
+                "title": format!("Rust std::{}", query),
+                "content": format!("Rust 标准库中的 {} 相关功能", query),
+                "relevance": 0.8,
+                "source": "rust_std",
+                "url": format!("https://doc.rust-lang.org/std/?search={}", urlencoding::encode(query))
+            })
+        ])
     }
     
     async fn search_python_docs(&self, query: &str) -> Result<Value> {
-        // 搜索 Python 官方文档
-        let results = vec![
-            json!({
-                "title": format!("Python {}", query),
-                "content": format!("Python 标准库中的 {} 模块或函数", query),
-                "relevance": 0.9,
-                "source": "python_docs",
-                "url": format!("https://docs.python.org/3/search.html?q={}", query)
-            })
-        ];
+        let mut results = Vec::new();
+        
+        if let Ok(pypi_results) = self.search_pypi(query).await {
+            results.extend(pypi_results);
+        }
+        
+        results.push(json!({
+            "title": format!("Python 官方文档: {}", query),
+            "content": format!("Python 官方文档中关于 {} 的内容", query),
+            "relevance": 0.8,
+            "source": "python_docs",
+            "url": format!("https://docs.python.org/3/search.html?q={}", urlencoding::encode(query))
+        }));
         
         Ok(json!({
             "results": results,
-            "total_hits": results.len()
+            "total_hits": results.len(),
+            "language": "python"
         }))
+    }
+    
+    async fn search_pypi(&self, query: &str) -> Result<Vec<Value>> {
+        let url = format!("https://pypi.org/search/?q={}", urlencoding::encode(query));
+        
+        Ok(vec![
+            json!({
+                "title": format!("PyPI 包搜索: {}", query),
+                "content": format!("在 PyPI 中搜索与 {} 相关的 Python 包", query),
+                "relevance": 0.9,
+                "source": "pypi",
+                "url": url
+            })
+        ])
     }
     
     async fn search_js_docs(&self, query: &str) -> Result<Value> {
-        // 搜索 JavaScript MDN 文档
-        let results = vec![
-            json!({
-                "title": format!("MDN: {}", query),
-                "content": format!("Mozilla Developer Network 中关于 {} 的文档", query),
-                "relevance": 0.9,
-                "source": "mdn",
-                "url": format!("https://developer.mozilla.org/en-US/search?q={}", query)
-            })
-        ];
+        let mut results = Vec::new();
+        
+        if let Ok(npm_results) = self.search_npm(query).await {
+            results.extend(npm_results);
+        }
+        
+        results.push(json!({
+            "title": format!("MDN Web Docs: {}", query),
+            "content": format!("Mozilla Developer Network 中关于 {} 的文档", query),
+            "relevance": 0.9,
+            "source": "mdn",
+            "url": format!("https://developer.mozilla.org/en-US/search?q={}", urlencoding::encode(query))
+        }));
         
         Ok(json!({
             "results": results,
-            "total_hits": results.len()
+            "total_hits": results.len(),
+            "language": "javascript"
         }))
     }
     
+    async fn search_npm(&self, query: &str) -> Result<Vec<Value>> {
+        let url = format!("https://registry.npmjs.org/-/v1/search?text={}&size=5", urlencoding::encode(query));
+        
+        match self.client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                if let Ok(data) = response.json::<Value>().await {
+                    let mut results = Vec::new();
+                    
+                    if let Some(objects) = data["objects"].as_array() {
+                        for obj in objects {
+                            if let Some(package) = obj["package"].as_object() {
+                                if let (Some(name), Some(description)) = (
+                                    package["name"].as_str(),
+                                    package["description"].as_str()
+                                ) {
+                                    results.push(json!({
+                                        "title": format!("NPM 包: {}", name),
+                                        "content": description,
+                                        "relevance": 0.9,
+                                        "source": "npm",
+                                        "url": format!("https://www.npmjs.com/package/{}", name)
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    
+                    Ok(results)
+                } else {
+                    Ok(Vec::new())
+                }
+            },
+            _ => Ok(Vec::new())
+        }
+    }
+    
     async fn search_go_docs(&self, query: &str) -> Result<Value> {
-        // 搜索 Go 官方文档
         let results = vec![
             json!({
-                "title": format!("Go pkg: {}", query),
-                "content": format!("Go 标准库中的 {} 包或函数", query),
+                "title": format!("Go 包搜索: {}", query),
+                "content": format!("在 pkg.go.dev 中搜索与 {} 相关的 Go 包", query),
                 "relevance": 0.9,
                 "source": "go_pkg",
-                "url": format!("https://pkg.go.dev/search?q={}", query)
+                "url": format!("https://pkg.go.dev/search?q={}", urlencoding::encode(query))
+            }),
+            json!({
+                "title": format!("Go 官方文档: {}", query),
+                "content": format!("Go 官方文档中关于 {} 的内容", query),
+                "relevance": 0.8,
+                "source": "go_docs",
+                "url": format!("https://golang.org/search?q={}", urlencoding::encode(query))
             })
         ];
         
         Ok(json!({
             "results": results,
-            "total_hits": results.len()
+            "total_hits": results.len(),
+            "language": "go"
         }))
     }
     
     async fn search_java_docs(&self, query: &str) -> Result<Value> {
-        // 搜索 Java 官方文档
         let results = vec![
             json!({
-                "title": format!("Java API: {}", query),
-                "content": format!("Java API 文档中的 {} 类或方法", query),
+                "title": format!("Maven Central: {}", query),
+                "content": format!("在 Maven Central 中搜索与 {} 相关的 Java 库", query),
                 "relevance": 0.9,
+                "source": "maven_central",
+                "url": format!("https://search.maven.org/search?q={}", urlencoding::encode(query))
+            }),
+            json!({
+                "title": format!("Java API 文档: {}", query),
+                "content": format!("Java API 文档中关于 {} 的内容", query),
+                "relevance": 0.8,
                 "source": "java_api",
-                "url": format!("https://docs.oracle.com/en/java/javase/17/docs/api/search.html?q={}", query)
+                "url": format!("https://docs.oracle.com/en/java/javase/17/docs/api/search.html?q={}", urlencoding::encode(query))
             })
         ];
         
         Ok(json!({
             "results": results,
-            "total_hits": results.len()
+            "total_hits": results.len(),
+            "language": "java"
         }))
     }
     
     async fn search_generic_docs(&self, query: &str, language: &str) -> Result<Value> {
-        // 通用搜索逻辑
         let results = vec![
             json!({
-                "title": format!("{} Documentation: {}", language, query),
-                "content": format!("关于 {} 在 {} 中的用法说明", query, language),
+                "title": format!("{} 文档搜索: {}", language, query),
+                "content": format!("在 {} 相关文档中搜索 {}", language, query),
                 "relevance": 0.7,
-                "source": "generic",
-                "url": format!("https://www.google.com/search?q={}+{}", language, query)
+                "source": "google",
+                "url": format!("https://www.google.com/search?q={}+{}+documentation", 
+                    urlencoding::encode(language), urlencoding::encode(query))
+            }),
+            json!({
+                "title": format!("GitHub 代码搜索: {}", query),
+                "content": format!("在 GitHub 中搜索 {} 相关的 {} 代码", language, query),
+                "relevance": 0.8,
+                "source": "github",
+                "url": format!("https://github.com/search?q={}+language:{}", 
+                    urlencoding::encode(query), urlencoding::encode(language))
+            }),
+            json!({
+                "title": format!("Stack Overflow: {}", query),
+                "content": format!("Stack Overflow 上关于 {} 和 {} 的问答", language, query),
+                "relevance": 0.6,
+                "source": "stackoverflow",
+                "url": format!("https://stackoverflow.com/search?q={}+{}", 
+                    urlencoding::encode(language), urlencoding::encode(query))
             })
         ];
         
         Ok(json!({
             "results": results,
-            "total_hits": results.len()
+            "total_hits": results.len(),
+            "language": language
         }))
     }
 }
@@ -219,10 +374,8 @@ impl MCPTool for SearchDocsTools {
     }
     
     async fn execute(&self, params: Value) -> Result<Value> {
-        // 验证参数
         self.validate_params(&params)?;
         
-        // 提取参数
         let query = params["query"]
             .as_str()
             .ok_or_else(|| MCPError::InvalidParameter("query 参数无效".into()))?;
@@ -235,10 +388,8 @@ impl MCPTool for SearchDocsTools {
             .as_u64()
             .unwrap_or(10) as usize;
             
-        // 搜索或从缓存获取
         let mut results = self.search_or_get_cached(query, language).await?;
         
-        // 处理最大结果数限制
         if let Some(results_array) = results["results"].as_array_mut() {
             if results_array.len() > max_results {
                 *results_array = results_array[0..max_results].to_vec();

@@ -46,7 +46,7 @@ impl Registry {
 }
 
 pub struct CheckVersionTool {
-    annotations: ToolAnnotations,
+    _annotations: ToolAnnotations,
     cache: Arc<RwLock<HashMap<String, (VersionInfo, DateTime<Utc>)>>>,
     client: reqwest::Client,
 }
@@ -54,7 +54,7 @@ pub struct CheckVersionTool {
 impl CheckVersionTool {
     pub fn new() -> Self {
         Self {
-            annotations: ToolAnnotations {
+            _annotations: ToolAnnotations {
                 category: "版本检查".to_string(),
                 tags: vec!["版本".to_string(), "检查".to_string()],
                 version: "1.0".to_string(),

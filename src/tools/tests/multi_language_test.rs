@@ -1,4 +1,9 @@
-use crate::tools::*;
+use crate::tools::{
+    analysis::AnalyzeCodeTool,
+    SearchDocsTool,
+    versioning::CheckVersionTool,
+    base::MCPTool,
+};
 use crate::errors::Result;
 use serde_json::json;
 use std::time::Duration;
@@ -69,7 +74,7 @@ class UserRepository {
             match result {
                 Ok(analysis) => {
                     println!("✅ Dart代码分析成功: {}", analysis);
-                    assert!(analysis["metrics"].is_object());
+                    assert!(analysis["analysis"].is_object());
                 },
                 Err(e) => {
                     println!("❌ Dart代码分析失败: {}", e);
@@ -155,7 +160,7 @@ public:
             match result {
                 Ok(analysis) => {
                     println!("✅ C++代码分析成功: {}", analysis);
-                    assert!(analysis["metrics"].is_object());
+                    assert!(analysis["analysis"].is_object());
                 },
                 Err(e) => {
                     println!("❌ C++代码分析失败: {}", e);
@@ -256,7 +261,7 @@ namespace UserManagement
             match result {
                 Ok(analysis) => {
                     println!("✅ C#代码分析成功: {}", analysis);
-                    assert!(analysis["metrics"].is_object());
+                    assert!(analysis["analysis"].is_object());
                 },
                 Err(e) => {
                     println!("❌ C#代码分析失败: {}", e);
@@ -275,7 +280,7 @@ namespace UserManagement
 async fn test_multi_language_search() -> Result<()> {
     println!("🌐 测试多语言文档搜索功能");
     
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     
     // 测试不同语言的文档搜索
     let languages = vec![
@@ -295,21 +300,11 @@ async fn test_multi_language_search() -> Result<()> {
             "max_results": 3
         });
         
-        match timeout(Duration::from_secs(30), search_tool.execute(params)).await {
-            Ok(result) => {
-                match result {
-                    Ok(docs) => {
-                        println!("✅ {} 搜索成功", language);
-                        assert!(docs["results"].as_array().is_some());
-                    },
-                    Err(e) => {
-                        println!("❌ {} 搜索失败: {}", language, e);
-                    }
-                }
-            },
-            Err(_) => {
-                println!("⏰ {} 搜索超时", language);
-            }
+        if let Ok(Ok(docs)) = timeout(Duration::from_secs(30), search_tool.execute(params)).await {
+            println!("✅ {} 搜索成功", language);
+            assert!(docs["results"].as_array().is_some());
+        } else {
+            println!("⏰ {} 搜索超时", language);
         }
     }
     
@@ -338,7 +333,7 @@ async fn test_cross_language_integration() -> Result<()> {
             "language": language
         });
         
-        if let Ok(Ok(analysis)) = timeout(Duration::from_secs(30), analysis_tool.execute(params)).await {
+        if let Ok(Ok(_analysis)) = timeout(Duration::from_secs(30), analysis_tool.execute(params)).await {
             println!("✅ {} 代码分析完成", language);
         } else {
             println!("⚠️ {} 代码分析跳过", language);
@@ -347,7 +342,7 @@ async fn test_cross_language_integration() -> Result<()> {
     
     // 2. 多语言文档搜索
     println!("\n步骤2: 多语言文档搜索");
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     
     let search_queries = vec![
         ("rust", "async await"),
@@ -363,7 +358,7 @@ async fn test_cross_language_integration() -> Result<()> {
             "max_results": 2
         });
         
-        if let Ok(Ok(docs)) = timeout(Duration::from_secs(30), search_tool.execute(params)).await {
+        if let Ok(Ok(_docs)) = timeout(Duration::from_secs(30), search_tool.execute(params)).await {
             println!("✅ {} 文档搜索完成", language);
         } else {
             println!("⚠️ {} 文档搜索跳过", language);
@@ -388,7 +383,7 @@ async fn test_cross_language_integration() -> Result<()> {
             "check_latest": true
         });
         
-        if let Ok(Ok(versions)) = timeout(Duration::from_secs(30), version_tool.execute(params)).await {
+        if let Ok(Ok(_versions)) = timeout(Duration::from_secs(30), version_tool.execute(params)).await {
             println!("✅ {} 版本检查完成", language);
         } else {
             println!("⚠️ {} 版本检查跳过", language);
@@ -427,8 +422,8 @@ async fn test_language_detection_and_analysis() -> Result<()> {
                 match result {
                     Ok(analysis) => {
                         println!("✅ {} 代码分析成功", expected_lang);
-                        assert_eq!(analysis["language"], expected_lang);
-                        assert!(analysis["metrics"]["lines"].as_u64().unwrap_or(0) > 0);
+                        assert_eq!(analysis["analysis"]["language"], expected_lang);
+                        assert!(analysis["analysis"]["lines"].as_u64().unwrap_or(0) > 0);
                     },
                     Err(e) => {
                         println!("❌ {} 代码分析失败: {}", expected_lang, e);

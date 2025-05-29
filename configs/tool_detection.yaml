@@ -307,16 +307,6 @@ mcp_tool_mapping:
     class: "SearchDocsTools"
     description: "搜索文档"
     universal: true
-  
-  changelog:
-    class: "GetChangelogTool"
-    description: "获取变更日志"
-    universal: true
-  
-  compare-versions:
-    class: "CompareVersionsTool"
-    description: "比较版本"
-    universal: true
 
 # 注册策略配置
 strategies:

@@ -10,7 +10,7 @@ use anyhow::Result;
 
 
 /// JSON Schema 定义
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Schema {
     Object(SchemaObject),
     String(SchemaString),
@@ -33,7 +33,7 @@ impl Schema {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaObject {
     pub required: Vec<String>,
     pub properties: HashMap<String, Schema>,
@@ -66,7 +66,7 @@ impl SchemaObject {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaString {
     pub description: Option<String>,
     pub enum_values: Option<Vec<String>>,
@@ -100,7 +100,7 @@ impl SchemaString {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaNumber {
     pub description: Option<String>,
     pub minimum: Option<f64>,
@@ -141,7 +141,7 @@ impl SchemaNumber {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaInteger {
     pub description: Option<String>,
     pub minimum: Option<i64>,
@@ -182,7 +182,7 @@ impl SchemaInteger {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaBoolean {
     pub description: Option<String>,
 }
@@ -205,7 +205,7 @@ impl SchemaBoolean {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SchemaArray {
     pub description: Option<String>,
     pub items: Box<Schema>,

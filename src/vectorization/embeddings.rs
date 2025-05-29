@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use serde_json::{json, Value};
 use tokio::time::{Duration, timeout};
 use regex::Regex;
 use async_openai::{Client, config::OpenAIConfig};
@@ -381,11 +381,93 @@ impl FileVectorizerImpl {
     
     /// 调用 async-openai 的 embeddings API
     async fn create_embeddings(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let is_nvidia = self.embedding_config.model_name.contains("nvidia/");
+        
+        if is_nvidia {
+            // 对于NVIDIA API，使用直接的HTTP请求
+            self.create_nvidia_embeddings(texts).await
+        } else {
+            // 对于其他API，使用async-openai
+            self.create_openai_embeddings(texts).await
+        }
+    }
+    
+    /// 使用NVIDIA API创建嵌入
+    async fn create_nvidia_embeddings(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        use reqwest::Client;
+        
+        let client = Client::new();
+        
+        let request_body = json!({
+            "input": texts,
+            "model": self.embedding_config.model_name,
+            "input_type": "passage",
+            "encoding_format": "float"
+        });
+        
+        let timeout_duration = Duration::from_secs(self.embedding_config.timeout_secs);
+        let response = timeout(timeout_duration, 
+            client
+                .post(&format!("{}/embeddings", self.embedding_config.api_base_url))
+                .header("Authorization", format!("Bearer {}", self.embedding_config.api_key))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+        )
+        .await
+        .map_err(|_| anyhow!("NVIDIA API请求超时"))?
+        .map_err(|e| anyhow!("NVIDIA API请求失败: {}", e))?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow!("NVIDIA API错误: {} - {}", status, error_text));
+        }
+        
+        let response_json: Value = response.json().await
+            .map_err(|e| anyhow!("NVIDIA API响应解析失败: {}", e))?;
+        
+        let embeddings = response_json["data"]
+            .as_array()
+            .ok_or_else(|| anyhow!("NVIDIA API响应缺少data字段"))?
+            .iter()
+            .map(|item| {
+                item["embedding"]
+                    .as_array()
+                    .ok_or_else(|| anyhow!("嵌入向量格式错误"))
+                    .and_then(|arr| {
+                        arr.iter()
+                            .map(|v| v.as_f64().map(|f| f as f32).ok_or_else(|| anyhow!("嵌入向量值无效")))
+                            .collect::<Result<Vec<f32>>>()
+                    })
+            })
+            .collect::<Result<Vec<Vec<f32>>>>()?;
+        
+        if embeddings.len() != texts.len() {
+            return Err(anyhow!(
+                "嵌入向量数量不匹配：期望 {}，获得 {}",
+                texts.len(),
+                embeddings.len()
+            ));
+        }
+        
+        Ok(embeddings)
+    }
+    
+    /// 使用async-openai创建嵌入
+    async fn create_openai_embeddings(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        // 检查模型是否支持dimensions参数
+        let supports_dimensions = !self.embedding_config.model_name.contains("nvidia/nv-embedqa");
+        
         let request = CreateEmbeddingRequest {
             model: self.embedding_config.model_name.clone(),
             input: EmbeddingInput::StringArray(texts.to_vec()),
             encoding_format: Some(async_openai::types::EncodingFormat::Float),
-            dimensions: self.embedding_config.dimensions.map(|d| d as u32),
+            dimensions: if supports_dimensions {
+                self.embedding_config.dimensions.map(|d| d as u32)
+            } else {
+                None
+            },
             user: None,
         };
         

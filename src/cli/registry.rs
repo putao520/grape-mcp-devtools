@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use anyhow::Result;
 use tracing::{info, warn};
 
@@ -44,16 +43,18 @@ impl DynamicToolRegistry {
 
     /// 注册工具创建工厂
     fn register_tool_factories(&mut self) {
-        use crate::tools::*;
+        
         use crate::tools::versioning::CheckVersionTool;
         use crate::tools::search::SearchDocsTools;
         use crate::tools::dependencies::AnalyzeDependenciesTool;
         use crate::tools::analysis::AnalyzeCodeTool;
-        use crate::tools::changelog::{GetChangelogTool, CompareVersionsTool};
         use crate::tools::api_docs::GetApiDocsTool;
         use crate::tools::python_docs_tool::PythonDocsTool;
         use crate::tools::javascript_docs_tool::JavaScriptDocsTool;
         use crate::tools::typescript_docs_tool::TypeScriptDocsTool;
+        use crate::tools::rust_docs_tool::RustDocsTool;
+        use crate::tools::java_docs_tool::JavaDocsTool;
+        use crate::tools::vector_docs_tool::VectorDocsTool;
 
         // 版本控制相关工具
         self.register_factory("git", || {
@@ -83,7 +84,7 @@ impl DynamicToolRegistry {
 
         // 文档工具相关
         self.register_factory("rustdoc", || {
-            Box::new(SearchDocsTools::new())
+            Box::new(RustDocsTool::new())
         });
 
         self.register_factory("jsdoc", || {
@@ -100,6 +101,10 @@ impl DynamicToolRegistry {
 
         self.register_factory("sphinx-build", || {
             Box::new(PythonDocsTool::new())
+        });
+
+        self.register_factory("javadoc", || {
+            Box::new(JavaDocsTool::new())
         });
 
         // 代码分析工具
@@ -141,14 +146,6 @@ impl DynamicToolRegistry {
             Box::new(AnalyzeCodeTool)
         });
 
-        self.register_factory("_universal_changelog", || {
-            Box::new(GetChangelogTool::new())
-        });
-
-        self.register_factory("_universal_compare_versions", || {
-            Box::new(CompareVersionsTool::new())
-        });
-
         self.register_factory("_universal_api_docs", || {
             Box::new(GetApiDocsTool::new(None))
         });
@@ -164,6 +161,26 @@ impl DynamicToolRegistry {
 
         self.register_factory("_universal_typescript_docs", || {
             Box::new(TypeScriptDocsTool::new())
+        });
+
+        self.register_factory("_universal_rust_docs", || {
+            Box::new(RustDocsTool::new())
+        });
+
+        self.register_factory("_universal_java_docs", || {
+            Box::new(JavaDocsTool::new())
+        });
+
+        // 嵌入式向量化文档工具（instant-distance，始终可用）
+        self.register_factory("_universal_vector_docs", || {
+            match VectorDocsTool::new() {
+                Ok(tool) => Box::new(tool),
+                Err(e) => {
+                    warn!("创建嵌入式向量化文档工具失败: {}", e);
+                    // 返回一个默认的占位工具，或者可以考虑其他处理方式
+                    Box::new(VectorDocsTool::default())
+                }
+            }
         });
     }
 
@@ -293,12 +310,13 @@ impl DynamicToolRegistry {
             "_universal_version_check", 
             "_universal_deps_analysis",
             "_universal_code_analysis",
-            "_universal_changelog",
-            "_universal_compare_versions",
             "_universal_api_docs",
             "_universal_python_docs",
             "_universal_javascript_docs",
             "_universal_typescript_docs",
+            "_universal_rust_docs",
+            "_universal_java_docs",
+            "_universal_vector_docs",
         ];
 
         for tool_name in universal_tools {

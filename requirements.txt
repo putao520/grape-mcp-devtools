@@ -1,0 +1,9 @@
+asyncio-subprocess
+httpx
+anthropic
+openai
+pydantic
+click
+rich
+tabulate
+python-dotenv 

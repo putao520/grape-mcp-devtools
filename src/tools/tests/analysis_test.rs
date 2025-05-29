@@ -13,7 +13,7 @@ async fn test_analyze_code_with_todo() {
     });
     
     let result = tool.execute(params).await.unwrap();
-    assert_eq!(result["status"], "success");
-    assert_eq!(result["language"], "rust");
+    assert_eq!(result["message"], "代码分析完成");
+    assert_eq!(result["analysis"]["language"], "rust");
     assert!(result["suggestions"].as_array().unwrap().len() > 0);
 }

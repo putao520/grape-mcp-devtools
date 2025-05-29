@@ -1,4 +1,11 @@
-use crate::tools::*;
+use crate::tools::{
+    SearchDocsTool,
+    dependencies::AnalyzeDependenciesTool,
+    api_docs::GetApiDocsTool,
+    analysis::{AnalyzeCodeTool, SuggestRefactoringTool},
+    versioning::CheckVersionTool,
+    base::MCPTool,
+};
 use crate::errors::Result;
 use serde_json::json;
 use std::time::Duration;
@@ -8,7 +15,7 @@ use tokio::time::timeout;
 async fn test_javascript_docs_search() -> Result<()> {
     println!("🟨 测试JavaScript文档搜索功能");
     
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     
     // 测试搜索JavaScript MDN文档
     let params = json!({
@@ -142,7 +149,7 @@ userService.addUser({ id: 1, name: "John Doe", email: "john@example.com" });
             match result {
                 Ok(analysis) => {
                     println!("✅ TypeScript代码分析成功: {}", analysis);
-                    assert!(analysis["metrics"].is_object());
+                    assert!(analysis["analysis"].is_object());
                     assert!(analysis["suggestions"].as_array().is_some());
                 },
                 Err(e) => {
@@ -192,7 +199,7 @@ function processUsers(users) {
             match result {
                 Ok(suggestions) => {
                     println!("✅ JavaScript重构建议成功: {}", suggestions);
-                    assert!(suggestions["suggestions"].as_array().is_some());
+                    assert!(suggestions["refactoring_suggestions"].as_array().is_some());
                 },
                 Err(e) => {
                     println!("❌ JavaScript重构建议失败: {}", e);
@@ -241,38 +248,6 @@ async fn test_javascript_api_docs() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_javascript_changelog() -> Result<()> {
-    println!("📝 测试JavaScript变更日志功能");
-    
-    let changelog_tool = GetChangelogTool;
-    
-    let params = json!({
-        "package": "react",
-        "language": "javascript",
-        "version": "18.2.0"
-    });
-    
-    match timeout(Duration::from_secs(30), changelog_tool.execute(params)).await {
-        Ok(result) => {
-            match result {
-                Ok(changelog) => {
-                    println!("✅ JavaScript变更日志获取成功: {}", changelog);
-                    assert!(changelog["changes"].as_array().is_some());
-                },
-                Err(e) => {
-                    println!("❌ JavaScript变更日志获取失败: {}", e);
-                }
-            }
-        },
-        Err(_) => {
-            println!("⏰ JavaScript变更日志获取超时，继续下一个测试");
-        }
-    }
-    
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_node_version_check() -> Result<()> {
     println!("🔢 测试Node.js版本检查功能");
     
@@ -311,7 +286,7 @@ async fn test_javascript_integration_workflow() -> Result<()> {
     
     // 1. 搜索JavaScript库文档
     println!("步骤1: 搜索Express.js文档");
-    let search_tool = SearchDocsTools::new();
+    let search_tool = SearchDocsTool::new();
     let search_params = json!({
         "query": "express middleware",
         "language": "javascript",

@@ -1,10 +1,10 @@
-use grape_mcp_devtools::cli::{CliDetector, DynamicToolRegistry};
+use grape_mcp_devtools::cli::{detector::CliDetector, registry::DynamicToolRegistry};
 use grape_mcp_devtools::cli::registry::RegistrationStrategy;
 use grape_mcp_devtools::mcp::server::MCPServer;
 
 #[tokio::test]
 async fn test_cli_detector_creation() {
-    let mut detector = CliDetector::new();
+    let detector = CliDetector::new();
     
     // 检测器应该能够创建
     assert!(!detector.is_tool_available("nonexistent-tool"));

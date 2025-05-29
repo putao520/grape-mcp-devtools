@@ -60,7 +60,7 @@ struct CodeAnalysisResult {
 }
 
 pub struct DocumentationSuggestionTool {
-    annotations: ToolAnnotations,
+    _annotations: ToolAnnotations,
     cache: Arc<RwLock<HashMap<String, (CodeAnalysisResult, DateTime<Utc>)>>>,
     http_client: Client,
     example_cache: Arc<RwLock<HashMap<String, (Vec<DocumentationExample>, DateTime<Utc>)>>>,
@@ -69,7 +69,7 @@ pub struct DocumentationSuggestionTool {
 impl DocumentationSuggestionTool {
     pub fn new() -> Self {
         Self {
-            annotations: ToolAnnotations {
+            _annotations: ToolAnnotations {
                 category: "文档建议".to_string(),
                 tags: vec!["文档".to_string(), "注释".to_string(), "代码质量".to_string()],
                 version: "2.0".to_string(),

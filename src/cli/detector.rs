@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// CLI工具信息
 #[derive(Debug, Clone, Serialize, Deserialize)]

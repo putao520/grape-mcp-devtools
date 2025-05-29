@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use anyhow::Result;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 use crate::tools::base::{MCPTool, Schema, SchemaObject, SchemaString};
 use crate::errors::MCPError;
@@ -273,9 +273,9 @@ impl PythonDocsTool {
     }
 
     /// 生成Python API参考
-    fn generate_python_api_reference(&self, package_name: &str, info: &Value) -> Value {
+    fn generate_python_api_reference(&self, _package_name: &str, _info: &Value) -> Value {
         json!({
-            "package": package_name,
+            "package": _package_name,
             "modules": [],
             "classes": [],
             "functions": [],
@@ -317,6 +317,38 @@ impl PythonDocsTool {
         }
 
         examples
+    }
+
+    #[allow(dead_code)]
+    fn generate_python_doc_entry(&self, package_name: &str, _info: &Value) -> Value {
+        // Implementation of generate_python_doc_entry method
+        // This method is not provided in the original file or the code block
+        // It's assumed to exist as it's called in the generate_python_docs method
+        // This implementation is left unchanged as it's not provided in the original file
+        json!({
+            "package_name": package_name,
+            "version": "unknown",
+            "language": "python",
+            "source": "generated",
+            "documentation": {
+                "type": "basic_info",
+                "content": format!("Python包: {}", package_name),
+                "sections": [
+                    {
+                        "title": "安装",
+                        "content": format!("pip install {}", package_name)
+                    },
+                    {
+                        "title": "导入",
+                        "content": format!("import {}", package_name)
+                    }
+                ]
+            },
+            "installation": {
+                "pip": format!("pip install {}", package_name),
+                "conda": format!("conda install {}", package_name)
+            }
+        })
     }
 }
 
