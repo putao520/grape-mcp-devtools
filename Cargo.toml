@@ -96,7 +96,7 @@ reqwest-retry = "0.4.0"
 # Base64 编码
 base64 = "0.21"
 # JavaScript执行引擎 (轻量级替代浏览器渲染)
-boa_engine = "0.17"
+boa_engine = "0.19"
 # JSON路径查询
 jsonpath = "0.1.1"
 # 数据库支持（可选）
