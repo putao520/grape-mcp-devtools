@@ -109,8 +109,11 @@ pub struct HnswConfig {
 /// 嵌入配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
-    /// 提供者类型 (nvidia, openai, local)
+    /// 提供者类型 (nvidia, openai, azure, ollama, mock)
     pub provider: String,
+    
+    /// API端点
+    pub endpoint: Option<String>,
     
     /// API 密钥
     pub api_key: Option<String>,
@@ -118,8 +121,20 @@ pub struct EmbeddingConfig {
     /// 模型名称
     pub model: String,
     
-    /// API 基础URL
+    /// API版本（Azure专用）
+    pub api_version: Option<String>,
+    
+    /// 嵌入维度
+    pub dimension: Option<usize>,
+    
+    /// API 基础URL（兼容性）
     pub base_url: Option<String>,
+    
+    /// 自定义请求头
+    pub headers: HashMap<String, String>,
+    
+    /// 重试次数
+    pub retry_attempts: usize,
     
     /// 批量大小
     pub batch_size: usize,
@@ -322,11 +337,16 @@ impl Default for HnswConfig {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            provider: "nvidia".to_string(),
+            provider: "mock".to_string(),
+            endpoint: None,
             api_key: None,
-            model: "nvidia/nv-embedqa-e5-v5".to_string(),
+            model: "text-embedding-3-small".to_string(),
+            api_version: None,
+            dimension: Some(1536),
             base_url: None,
-            batch_size: 32,
+            headers: HashMap::new(),
+            retry_attempts: 3,
+            batch_size: 100,
             timeout_seconds: 30,
         }
     }
@@ -371,5 +391,55 @@ impl Default for HybridWeights {
             keyword: 0.3,
             context: 0.1,
         }
+    }
+}
+
+impl VectorDbConfig {
+    /// 使用OpenAI兼容API创建配置
+    pub fn with_openai_compatible(endpoint: String, api_key: String, model: String) -> Self {
+        let mut config = Self::default();
+        config.embedding = EmbeddingConfig {
+            provider: "openai".to_string(),
+            endpoint: Some(endpoint),
+            api_key: Some(api_key),
+            model,
+            dimension: Some(1536),
+            ..Default::default()
+        };
+        config
+    }
+
+    /// 使用Azure OpenAI创建配置
+    pub fn with_azure_openai(
+        endpoint: String,
+        api_key: String,
+        deployment_name: String,
+        api_version: String,
+    ) -> Self {
+        let mut config = Self::default();
+        config.embedding = EmbeddingConfig {
+            provider: "azure".to_string(),
+            endpoint: Some(endpoint),
+            api_key: Some(api_key),
+            model: deployment_name,
+            api_version: Some(api_version),
+            dimension: Some(1536),
+            ..Default::default()
+        };
+        config
+    }
+
+    /// 使用Ollama创建配置
+    pub fn with_ollama(endpoint: String, model: String) -> Self {
+        let mut config = Self::default();
+        config.embedding = EmbeddingConfig {
+            provider: "ollama".to_string(),
+            endpoint: Some(endpoint),
+            model,
+            dimension: Some(768),
+            ..Default::default()
+        };
+        config.vector_dimension = 768; // Ollama常用维度
+        config
     }
 } 

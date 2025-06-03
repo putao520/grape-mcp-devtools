@@ -181,92 +181,68 @@ impl MCPError {
 /// 向量数据库错误类型
 #[derive(Error, Debug)]
 pub enum VectorDbError {
-    /// IO 错误
-    #[error("IO 错误: {0}")]
-    Io(#[from] std::io::Error),
-    
-    /// 序列化错误
-    #[error("序列化错误: {0}")]
-    Serialization(#[from] bincode::Error),
-    
-    /// JSON 序列化错误
-    #[error("JSON 错误: {0}")]
-    Json(#[from] serde_json::Error),
-    
-    /// 网络请求错误
-    #[error("网络请求错误: {0}")]
-    Request(#[from] reqwest::Error),
-    
-    /// 配置错误
-    #[error("配置错误: {0}")]
-    Config(String),
-    
-    /// 索引错误
-    #[error("索引错误: {0}")]
-    Index(String),
-    
-    /// 嵌入向量生成错误
-    #[error("嵌入向量生成错误: {0}")]
-    Embedding(String),
-    
-    /// 查询错误
-    #[error("查询错误: {0}")]
-    Query(String),
-    
-    /// 存储错误
     #[error("存储错误: {0}")]
     Storage(String),
     
-    /// 文档不存在
-    #[error("文档不存在: {0}")]
-    DocumentNotFound(String),
+    #[error("索引错误: {0}")]
+    Index(String),
     
-    /// 重复文档
-    #[error("文档已存在: {0}")]
-    DuplicateDocument(String),
+    #[error("嵌入错误: {0}")]
+    Embedding(String),
     
-    /// 无效向量维度
-    #[error("无效向量维度: 期望 {expected}, 实际 {actual}")]
+    #[error("配置错误: {0}")]
+    Config(String),
+    
+    #[error("查询错误: {0}")]
+    Query(String),
+    
+    #[error("无效的向量维度: 期望 {expected}, 实际 {actual}")]
     InvalidVectorDimension { expected: usize, actual: usize },
     
-    /// 缓存错误
-    #[error("缓存错误: {0}")]
-    Cache(String),
+    #[error("I/O 错误: {0}")]
+    Io(#[from] std::io::Error),
     
-    /// 其他错误
-    #[error("未知错误: {0}")]
+    #[error("序列化错误: {0}")]
+    Serialization(#[from] serde_json::Error),
+    
+    #[error("HTTP 错误: {0}")]
+    Http(#[from] reqwest::Error),
+    
+    #[error("Sled 数据库错误: {0}")]
+    Sled(#[from] sled::Error),
+    
+    #[error("二进制编码错误: {0}")]
+    Bincode(#[from] bincode::Error),
+    
+    #[error("任务错误: {0}")]
+    Task(#[from] tokio::task::JoinError),
+    
+    #[error("其他错误: {0}")]
     Other(String),
 }
 
-impl From<anyhow::Error> for VectorDbError {
-    fn from(err: anyhow::Error) -> Self {
-        VectorDbError::Other(err.to_string())
-    }
-}
-
 impl VectorDbError {
-    /// 创建配置错误
-    pub fn config_error(msg: impl Into<String>) -> Self {
-        VectorDbError::Config(msg.into())
+    pub fn storage_error(msg: String) -> Self {
+        Self::Storage(msg)
     }
     
-    /// 创建索引错误
-    pub fn index_error(msg: impl Into<String>) -> Self {
-        VectorDbError::Index(msg.into())
+    pub fn index_error(msg: String) -> Self {
+        Self::Index(msg)
     }
     
-    /// 创建嵌入错误
-    pub fn embedding_error(msg: impl Into<String>) -> Self {
-        VectorDbError::Embedding(msg.into())
+    pub fn embedding_error(msg: String) -> Self {
+        Self::Embedding(msg)
     }
     
-    /// 创建查询错误
-    pub fn query_error(msg: impl Into<String>) -> Self {
-        VectorDbError::Query(msg.into())
+    pub fn config_error(msg: String) -> Self {
+        Self::Config(msg)
     }
     
-    /// 创建存储错误
-    pub fn storage_error(msg: impl Into<String>) -> Self {
-        VectorDbError::Storage(msg.into())
+    pub fn query_error(msg: String) -> Self {
+        Self::Query(msg)
+    }
+    
+    pub fn other_error(msg: String) -> Self {
+        Self::Other(msg)
     }
 }
