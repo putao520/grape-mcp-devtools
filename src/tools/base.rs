@@ -234,7 +234,7 @@ impl SchemaArray {
     }
 }
 
-/// 工具元信息
+/// 工具注解信息（用于工具发现和分类）
 #[derive(Debug, Clone)]
 pub struct ToolAnnotations {
     pub category: String,
@@ -263,33 +263,6 @@ pub trait MCPTool: Send + Sync {
         schema.validate(params)
             .map_err(|e| MCPError::InvalidParameter(e.to_string()).into())
     }
-}
-
-// 简化版工具接口，适用于自然语言查询
-#[async_trait]
-pub trait SimpleMCPTool: Send + Sync {
-    /// 获取工具名称
-    fn name(&self) -> &str;
-
-    /// 获取工具描述
-    fn description(&self) -> &str;
-
-    /// 验证文本查询
-    fn validate_query(&self, text_query: &str) -> Result<()> {
-        if text_query.trim().is_empty() {
-            return Err(MCPError::InvalidParameter("查询不能为空".into()).into());
-        }
-        Ok(())
-    }
-
-    /// 执行简化工具
-    async fn execute_simple(&self, text_query: &str) -> Result<String> {
-        self.validate_query(text_query)?;
-        self.process_query(text_query).await
-    }
-
-    /// 处理查询的具体实现
-    async fn process_query(&self, text_query: &str) -> Result<String>;
 }
 
 /// 文件级文档片段 - 新的核心数据结构
@@ -530,54 +503,5 @@ pub struct HierarchyFilter {
     pub similarity_threshold: Option<f32>,
 }
 
-/// 文档生成器trait（文件级）
-#[async_trait::async_trait]
-pub trait FileDocumentGenerator: Send + Sync {
-    /// 生成指定包的所有文档文件
-    async fn generate_package_docs(
-        &self,
-        package_name: &str,
-        version: &str,
-    ) -> Result<Vec<FileDocumentFragment>>;
-    
-    /// 检查包文档是否存在
-    async fn package_docs_exist(&self, package_name: &str, version: &str) -> Result<bool>;
-    
-    /// 获取包的最新版本
-    async fn get_latest_version(&self, package_name: &str) -> Result<String>;
-    
-    /// 获取支持的语言
-    fn supported_language(&self) -> &str;
-}
-
-/// 文档向量化器trait
-#[async_trait::async_trait]
-pub trait FileVectorizer: Send + Sync {
-    /// 向量化单个文件
-    async fn vectorize_file(&self, fragment: &FileDocumentFragment) -> Result<DocumentVector>;
-    
-    /// 批量向量化多个文件
-    async fn vectorize_files_batch(&self, fragments: &[FileDocumentFragment]) -> Result<Vec<DocumentVector>>;
-    
-    /// 向量化查询文本
-    async fn vectorize_query(&self, query: &str) -> Result<Vec<f32>>;
-}
-
-/// 文档存储trait
-#[async_trait::async_trait]
-pub trait FileDocumentStore: Send + Sync {
-    /// 存储文件向量
-    async fn store_file_vector(&self, vector: &DocumentVector, fragment: &FileDocumentFragment) -> Result<()>;
-    
-    /// 批量存储文件向量
-    async fn store_file_vectors_batch(&self, vectors: &[(DocumentVector, FileDocumentFragment)]) -> Result<()>;
-    
-    /// 层次化搜索
-    async fn search_with_hierarchy(&self, query_vector: Vec<f32>, filter: &HierarchyFilter) -> Result<Vec<FileSearchResult>>;
-    
-    /// 检查文档是否存在
-    async fn file_exists(&self, language: &str, package: &str, version: &str, file_path: &str) -> Result<bool>;
-    
-    /// 删除包的所有文档
-    async fn delete_package_docs(&self, language: &str, package: &str, version: &str) -> Result<()>;
-}
+// 移除未使用的trait，这些接口在实际实现中没有使用
+// 实际的文档生成和向量化逻辑已经在具体工具类中实现

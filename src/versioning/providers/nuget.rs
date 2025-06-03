@@ -9,14 +9,6 @@ pub struct NugetProvider {
     client: Client,
 }
 
-impl NugetProvider {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-        }
-    }
-}
-
 #[async_trait]
 impl crate::versioning::traits::PackageProvider for NugetProvider {
     async fn get_package_info(&self, package_name: &str) -> Result<Package> {

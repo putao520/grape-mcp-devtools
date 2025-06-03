@@ -1,0 +1,456 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use crate::tools::docs::openai_vectorizer::OpenAIVectorizer;
+use crate::tools::docs::doc_traits::{DocumentStore, DocumentVectorizer, DocumentFragment, SearchFilter, SearchResult as DocSearchResult, DocElementKind};
+use tantivy::collector::TopDocs;
+use tantivy::query::QueryParser;
+use tantivy::schema::*;
+use tantivy::{doc, Index, IndexWriter, Term};
+
+/// 统一向量存储，集成Tantivy全文搜索和语义向量搜索
+pub struct UnifiedVectorStore {
+    /// 向量化器（使用项目已有的OpenAI兼容服务）
+    vectorizer: Arc<OpenAIVectorizer>,
+    /// Tantivy索引（用于全文搜索）
+    tantivy_index: Index,
+    /// Tantivy索引写入器
+    tantivy_writer: Arc<Mutex<IndexWriter>>,
+    /// Tantivy查询解析器
+    query_parser: QueryParser,
+    /// 向量存储（用于语义搜索）
+    vector_store: Arc<Mutex<VectorMemoryStore>>,
+    /// Schema字段
+    schema_fields: SchemaFields,
+}
+
+/// Tantivy Schema字段定义
+#[derive(Clone)]
+struct SchemaFields {
+    id: Field,
+    content: Field,
+    title: Field,
+    language: Field,
+    package_name: Field,
+    doc_type: Field,
+    metadata: Field,
+}
+
+/// 内存向量存储
+struct VectorMemoryStore {
+    /// 文档ID到向量的映射
+    vectors: HashMap<String, Vec<f32>>,
+    /// 文档元数据
+    documents: HashMap<String, DocumentFragment>,
+    /// 文档ID列表（用于高效索引）
+    doc_ids: Vec<String>,
+}
+
+/// 统一搜索结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedSearchResult {
+    /// 文档片段
+    pub fragment: DocumentFragment,
+    /// 全文搜索得分
+    pub fulltext_score: f32,
+    /// 语义相似度得分
+    pub semantic_score: f32,
+    /// 混合得分
+    pub hybrid_score: f32,
+    /// 匹配类型
+    pub match_type: MatchType,
+}
+
+/// 匹配类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MatchType {
+    FullText,      // 仅全文匹配
+    Semantic,      // 仅语义匹配
+    Hybrid,        // 混合匹配
+}
+
+impl UnifiedVectorStore {
+    /// 创建新的统一向量存储
+    pub async fn new(index_path: PathBuf) -> Result<Self> {
+        // 初始化向量化器（使用项目已有服务）
+        let vectorizer = Arc::new(OpenAIVectorizer::from_env()?);
+
+        // 创建Tantivy schema
+        let mut schema_builder = Schema::builder();
+        let id = schema_builder.add_text_field("id", TEXT | STORED);
+        let content = schema_builder.add_text_field("content", TEXT | STORED);
+        let title = schema_builder.add_text_field("title", TEXT | STORED);
+        let language = schema_builder.add_text_field("language", STRING | STORED);
+        let package_name = schema_builder.add_text_field("package_name", STRING | STORED);
+        let doc_type = schema_builder.add_text_field("doc_type", STRING | STORED);
+        let metadata = schema_builder.add_text_field("metadata", TEXT | STORED);
+        
+        let schema = schema_builder.build();
+        
+        // 创建或打开Tantivy索引
+        let index = if index_path.exists() {
+            Index::open_in_dir(&index_path)?
+        } else {
+            std::fs::create_dir_all(&index_path)?;
+            Index::create_in_dir(&index_path, schema.clone())?
+        };
+
+        // 创建索引写入器
+        let writer = index.writer(50_000_000)?; // 50MB 缓冲区
+        
+        // 创建查询解析器
+        let query_parser = QueryParser::for_index(&index, vec![content, title]);
+
+        // 创建内存向量存储
+        let vector_store = Arc::new(Mutex::new(VectorMemoryStore {
+            vectors: HashMap::new(),
+            documents: HashMap::new(),
+            doc_ids: Vec::new(),
+        }));
+
+        let schema_fields = SchemaFields {
+            id, content, title, language, package_name, doc_type, metadata,
+        };
+
+        Ok(Self {
+            vectorizer,
+            tantivy_index: index,
+            tantivy_writer: Arc::new(Mutex::new(writer)),
+            query_parser,
+            vector_store,
+            schema_fields,
+        })
+    }
+
+    /// 添加文档（同时索引全文和向量）
+    pub async fn add_document(&self, fragment: &DocumentFragment) -> Result<()> {
+        tracing::info!("📝 添加文档到统一存储: {}", fragment.id);
+
+        // 1. 生成语义向量（使用项目已有的向量化服务）
+        let vector = self.vectorizer.vectorize(&fragment.content).await?;
+
+        // 2. 添加到向量存储
+        {
+            let mut store = self.vector_store.lock().unwrap();
+            store.vectors.insert(fragment.id.clone(), vector);
+            store.documents.insert(fragment.id.clone(), fragment.clone());
+            store.doc_ids.push(fragment.id.clone());
+        }
+
+        // 3. 添加到Tantivy索引
+        {
+            let writer = self.tantivy_writer.lock().unwrap();
+            
+            // 序列化元数据
+            let metadata_json = serde_json::to_string(&fragment.metadata)?;
+            
+            let doc = doc!(
+                self.schema_fields.id => fragment.id.clone(),
+                self.schema_fields.content => fragment.content.clone(),
+                self.schema_fields.title => fragment.title.clone(),
+                self.schema_fields.language => fragment.language.clone(),
+                self.schema_fields.package_name => fragment.package_name.clone(),
+                self.schema_fields.doc_type => format!("{:?}", fragment.doc_type),
+                self.schema_fields.metadata => metadata_json,
+            );
+            
+            writer.add_document(doc)?;
+        }
+
+        tracing::debug!("✅ 文档已添加到统一存储");
+        Ok(())
+    }
+
+    /// 批量添加文档
+    pub async fn add_documents_batch(&self, fragments: &[DocumentFragment]) -> Result<()> {
+        tracing::info!("📦 批量添加 {} 个文档到统一存储", fragments.len());
+
+        // 批量生成向量
+        let contents: Vec<String> = fragments.iter().map(|f| f.content.clone()).collect();
+        let vectors = self.batch_vectorize(&contents).await?;
+
+        // 批量添加到存储
+        {
+            let mut store = self.vector_store.lock().unwrap();
+            let writer = self.tantivy_writer.lock().unwrap();
+
+            for (fragment, vector) in fragments.iter().zip(vectors.iter()) {
+                // 向量存储
+                store.vectors.insert(fragment.id.clone(), vector.clone());
+                store.documents.insert(fragment.id.clone(), fragment.clone());
+                store.doc_ids.push(fragment.id.clone());
+
+                // Tantivy索引
+                let metadata_json = serde_json::to_string(&fragment.metadata)?;
+                let doc = doc!(
+                    self.schema_fields.id => fragment.id.clone(),
+                    self.schema_fields.content => fragment.content.clone(),
+                    self.schema_fields.title => fragment.title.clone(),
+                    self.schema_fields.language => fragment.language.clone(),
+                    self.schema_fields.package_name => fragment.package_name.clone(),
+                    self.schema_fields.doc_type => format!("{:?}", fragment.doc_type),
+                    self.schema_fields.metadata => metadata_json,
+                );
+                writer.add_document(doc)?;
+            }
+        }
+
+        tracing::info!("✅ 批量添加完成");
+        Ok(())
+    }
+
+    /// 混合搜索（结合全文搜索和语义搜索）
+    pub async fn hybrid_search(
+        &self,
+        query: &str,
+        limit: usize,
+        semantic_weight: f32, // 语义搜索权重 (0.0-1.0)
+    ) -> Result<Vec<UnifiedSearchResult>> {
+        tracing::info!("🔍 执行混合搜索: '{}', 限制: {}, 语义权重: {}", query, limit, semantic_weight);
+
+        // 1. 全文搜索
+        let fulltext_results = self.fulltext_search(query, limit * 2).await?;
+        
+        // 2. 语义搜索
+        let semantic_results = self.semantic_search(query, limit * 2).await?;
+
+        // 3. 合并和重排序
+        let mut combined_results = HashMap::new();
+        
+        // 添加全文搜索结果
+        for result in fulltext_results {
+            combined_results.insert(result.fragment.id.clone(), UnifiedSearchResult {
+                fragment: result.fragment,
+                fulltext_score: result.score,
+                semantic_score: 0.0,
+                hybrid_score: result.score * (1.0 - semantic_weight),
+                match_type: MatchType::FullText,
+            });
+        }
+
+        // 添加语义搜索结果并计算混合得分
+        for result in semantic_results {
+            if let Some(existing) = combined_results.get_mut(&result.fragment.id) {
+                // 更新现有结果
+                existing.semantic_score = result.score;
+                existing.hybrid_score = existing.fulltext_score * (1.0 - semantic_weight) + 
+                                       result.score * semantic_weight;
+                existing.match_type = MatchType::Hybrid;
+            } else {
+                // 新的语义匹配结果
+                combined_results.insert(result.fragment.id.clone(), UnifiedSearchResult {
+                    fragment: result.fragment,
+                    fulltext_score: 0.0,
+                    semantic_score: result.score,
+                    hybrid_score: result.score * semantic_weight,
+                    match_type: MatchType::Semantic,
+                });
+            }
+        }
+
+        // 按混合得分排序
+        let mut final_results: Vec<UnifiedSearchResult> = combined_results.into_values().collect();
+        final_results.sort_by(|a, b| b.hybrid_score.partial_cmp(&a.hybrid_score)
+                                    .unwrap_or(std::cmp::Ordering::Equal));
+        final_results.truncate(limit);
+
+        tracing::info!("✅ 混合搜索完成，返回 {} 个结果", final_results.len());
+        Ok(final_results)
+    }
+
+    /// 全文搜索（使用Tantivy）
+    async fn fulltext_search(&self, query: &str, limit: usize) -> Result<Vec<DocSearchResult>> {
+        let reader = self.tantivy_index.reader()?;
+        let searcher = reader.searcher();
+        
+        // 解析查询
+        let query = self.query_parser.parse_query(query)?;
+        
+        // 执行搜索
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
+        
+        let mut results = Vec::new();
+        for (score, doc_address) in top_docs {
+            let retrieved_doc: tantivy::TantivyDocument = searcher.doc(doc_address)?;
+            
+            // 提取字段值 - 使用正确的OwnedValue API
+            let id = retrieved_doc.get_first(self.schema_fields.id)
+                .and_then(|v| match v {
+                    tantivy::schema::OwnedValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            
+            let content = retrieved_doc.get_first(self.schema_fields.content)
+                .and_then(|v| match v {
+                    tantivy::schema::OwnedValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            
+            let title = retrieved_doc.get_first(self.schema_fields.title)
+                .and_then(|v| match v {
+                    tantivy::schema::OwnedValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            
+            let language = retrieved_doc.get_first(self.schema_fields.language)
+                .and_then(|v| match v {
+                    tantivy::schema::OwnedValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            
+            let package_name = retrieved_doc.get_first(self.schema_fields.package_name)
+                .and_then(|v| match v {
+                    tantivy::schema::OwnedValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            // 从向量存储获取完整文档信息
+            let fragment = {
+                let store = self.vector_store.lock().unwrap();
+                if let Some(doc) = store.documents.get(&id) {
+                    doc.clone()
+                } else {
+                    // 如果向量存储中没有，创建基础片段
+                    DocumentFragment {
+                        id: id.clone(),
+                        content,
+                        title,
+                        language,
+                        package_name,
+                        version: Some("unknown".to_string()),
+                        doc_type: DocElementKind::Other,
+                        metadata: HashMap::new(),
+                    }
+                }
+            };
+
+            results.push(DocSearchResult {
+                fragment,
+                score,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// 语义搜索（使用向量相似度）
+    async fn semantic_search(&self, query: &str, limit: usize) -> Result<Vec<DocSearchResult>> {
+        // 生成查询向量
+        let query_vector = self.vectorizer.vectorize(query).await?;
+        
+        // 计算相似度并排序
+        let store = self.vector_store.lock().unwrap();
+        let mut similarities: Vec<(String, f32)> = store.vectors
+            .iter()
+            .map(|(id, vector)| {
+                let similarity = self.vectorizer.calculate_similarity(&query_vector, vector);
+                (id.clone(), similarity)
+            })
+            .collect();
+
+        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        similarities.truncate(limit);
+
+        // 构建结果
+        let mut results = Vec::new();
+        for (doc_id, score) in similarities {
+            if let Some(fragment) = store.documents.get(&doc_id) {
+                results.push(DocSearchResult {
+                    fragment: fragment.clone(),
+                    score,
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// 批量向量化
+    async fn batch_vectorize(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let mut vectors = Vec::new();
+        
+        // 可以在这里实现批量API调用优化
+        // 目前简单地逐个调用
+        for text in texts {
+            let vector = self.vectorizer.vectorize(text).await?;
+            vectors.push(vector);
+        }
+        
+        Ok(vectors)
+    }
+
+    /// 提交索引更改
+    pub fn commit(&self) -> Result<()> {
+        let mut writer = self.tantivy_writer.lock().unwrap();
+        writer.commit()?;
+        Ok(())
+    }
+
+    /// 获取存储统计信息
+    pub fn get_stats(&self) -> (usize, usize) {
+        let store = self.vector_store.lock().unwrap();
+        (store.documents.len(), store.vectors.len())
+    }
+
+    /// 删除文档
+    pub fn delete_document(&self, doc_id: &str) -> Result<()> {
+        // 从向量存储删除
+        {
+            let mut store = self.vector_store.lock().unwrap();
+            store.vectors.remove(doc_id);
+            store.documents.remove(doc_id);
+            store.doc_ids.retain(|id| id != doc_id);
+        }
+
+        // 从Tantivy删除
+        {
+            let mut writer = self.tantivy_writer.lock().unwrap();
+            let id_term = Term::from_field_text(self.schema_fields.id, doc_id);
+            writer.delete_term(id_term);
+        }
+
+        Ok(())
+    }
+}
+
+/// 实现DocumentStore trait以提供标准接口
+#[async_trait::async_trait]
+impl DocumentStore for UnifiedVectorStore {
+    async fn store(&self, fragment: &DocumentFragment) -> Result<()> {
+        self.add_document(fragment).await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<DocumentFragment>> {
+        let store = self.vector_store.lock().unwrap();
+        Ok(store.documents.get(id).cloned())
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        self.delete_document(id)?;
+        self.commit()?;
+        Ok(())
+    }
+
+    async fn search(&self, query: &str, filter: &SearchFilter) -> Result<Vec<DocSearchResult>> {
+        // 使用混合搜索，权重可配置
+        let unified_results = self.hybrid_search(query, filter.limit.unwrap_or(10), 0.3).await?;
+        
+        // 转换为标准搜索结果
+        let results = unified_results
+            .into_iter()
+            .map(|ur| DocSearchResult {
+                fragment: ur.fragment,
+                score: ur.hybrid_score,
+            })
+            .collect();
+
+        Ok(results)
+    }
+} 

@@ -230,7 +230,7 @@ fn process_numbers(numbers: Vec<i32>) -> Vec<i32> {
 async fn test_rust_api_docs() -> Result<()> {
     println!("📚 测试Rust API文档获取功能");
     
-    let api_tool = GetApiDocsTool::new(None);
+    let api_tool = GetApiDocsTool::new();
     
     let params = json!({
         "language": "rust",

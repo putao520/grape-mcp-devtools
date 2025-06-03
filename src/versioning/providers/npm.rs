@@ -9,14 +9,6 @@ pub struct NpmProvider {
     client: Client,
 }
 
-impl NpmProvider {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-        }
-    }
-}
-
 #[async_trait]
 impl crate::versioning::traits::PackageProvider for NpmProvider {
     async fn get_package_info(&self, package_name: &str) -> Result<Package> {

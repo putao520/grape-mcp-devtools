@@ -194,7 +194,7 @@ impl LanguageFeaturesTool {
         };
         
         let features = self.version_service
-            .search_features(language, version, query, feature_category)
+            .search_features(language, query, feature_category, version)
             .await?;
             
         Ok(json!({
@@ -318,13 +318,36 @@ impl MCPTool for LanguageFeaturesTool {
             "search_features" => {
                 let language = params.get("language")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| MCPError::InvalidParameter("缺少language参数".to_string()))?;
-                let version = params.get("version").and_then(|v| v.as_str());
+                    .ok_or_else(|| anyhow::anyhow!("参数无效: 缺少language参数"))?;
+                    
                 let query = params.get("query")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| MCPError::InvalidParameter("缺少query参数".to_string()))?;
-                let category = params.get("category").and_then(|v| v.as_str());
-                self.handle_search_features(language, version, query, category).await
+                    .ok_or_else(|| anyhow::anyhow!("参数无效: 缺少query参数"))?;
+                    
+                let feature_category = params.get("category")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| serde_json::from_str::<FeatureCategory>(&format!("\"{}\"", s)).ok());
+                    
+                let version = params.get("version").and_then(|v| v.as_str());
+                
+                // 克隆feature_category以避免借用问题
+                let category_for_response = feature_category.clone();
+                
+                let features = self.version_service
+                    .search_features(language, query, feature_category, version)
+                    .await?;
+                
+                Ok(json!({
+                    "action": "search_features",
+                    "language": language,
+                    "query": query,
+                    "category": category_for_response,
+                    "version": version,
+                    "features": features,
+                    "count": features.len(),
+                    "status": "success",
+                    "timestamp": chrono::Utc::now()
+                }))
             }
             
             "get_syntax_changes" => {

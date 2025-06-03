@@ -105,6 +105,18 @@ sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"], optiona
 # 额外工具
 sha2 = "0.10"
 once_cell = "1.19"
+# 添加md5依赖用于内容哈希计算
+md5 = "0.7"
+tantivy = "0.24"
+# 使用我们新创建的向量数据库crate
+grape-vector-db = { path = "../grape-vector-db" }
+# Windows API
+winapi = { version = "0.3", features = ["processthreadsapi", "securitybaseapi", "winnt", "handleapi"] }
+# 字符串匹配和正则表达式
+aho-corasick = "1.1"
+fancy-regex = "0.13"
+# Unicode处理
+unicode-segmentation = "1.10"
 
 [dev-dependencies]
 tokio-test = "0.4.2"

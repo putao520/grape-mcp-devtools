@@ -10,8 +10,13 @@ use grape_mcp_devtools::{
         versioning::CheckVersionTool,
         api_docs::GetApiDocsTool,
         enhanced_language_tool::{EnhancedLanguageTool, DocumentStrategy},
+        FlutterDocsTool,
+        VectorDocsTool,
+        EnhancedDocumentProcessor,
     },
 };
+use std::sync::Arc;
+use dotenv;
 
 /// 测试CLI - 验证MCP工具功能
 #[tokio::main]
@@ -56,13 +61,18 @@ async fn main() -> Result<()> {
     println!("{}", "-".repeat(40));
     test_enhanced_language_tools().await?;
     
-    // 测试6: CLI工具可用性检测
-    println!("\n📋 测试6: CLI工具可用性检测");
+    // 测试6: Flutter专用工具
+    println!("\n📋 测试6: Flutter专用工具");
+    println!("{}", "-".repeat(40));
+    test_flutter_docs_tool().await?;
+    
+    // 测试7: CLI工具可用性检测
+    println!("\n📋 测试7: CLI工具可用性检测");
     println!("{}", "-".repeat(40));
     test_cli_tools_availability().await?;
     
-    // 测试7: HTTP后备测试
-    println!("\n📋 测试7: HTTP后备功能");
+    // 测试8: HTTP后备测试
+    println!("\n📋 测试8: HTTP后备功能");
     println!("{}", "-".repeat(40));
     test_http_fallback().await?;
     
@@ -84,7 +94,7 @@ async fn test_mcp_server_creation() -> Result<()> {
     let version_tool = CheckVersionTool::new();
     mcp_server.register_tool(Box::new(version_tool)).await?;
     
-    let api_docs_tool = GetApiDocsTool::new(None);
+    let api_docs_tool = GetApiDocsTool::new();
     mcp_server.register_tool(Box::new(api_docs_tool)).await?;
     
     let tool_count = mcp_server.get_tool_count().await?;
@@ -123,7 +133,7 @@ async fn test_version_check_tool() -> Result<()> {
 
 /// 测试API文档工具
 async fn test_api_docs_tool() -> Result<()> {
-    let tool = GetApiDocsTool::new(None);
+    let tool = GetApiDocsTool::new();
     
     // 测试获取Rust标准库文档
     let test_params = json!({
@@ -183,6 +193,10 @@ async fn test_search_docs_tool() -> Result<()> {
 
 /// 测试增强语言工具
 async fn test_enhanced_language_tools() -> Result<()> {
+    // 首先创建必需的依赖
+    let vector_tool = Arc::new(VectorDocsTool::new()?);
+    let doc_processor = Arc::new(EnhancedDocumentProcessor::new(vector_tool).await?);
+    
     let languages = vec![
         ("rust", "serde"),
         ("go", "github.com/gin-gonic/gin"),
@@ -194,7 +208,7 @@ async fn test_enhanced_language_tools() -> Result<()> {
     for (language, package) in languages {
         println!("  🔧 测试 {} 语言工具 - 包: {}", language, package);
         
-        match test_single_language_tool(language, package).await {
+        match test_single_language_tool(language, package, Arc::clone(&doc_processor)).await {
             Ok(_) => {
                 println!("    ✅ {} 工具测试成功", language);
             }
@@ -208,9 +222,9 @@ async fn test_enhanced_language_tools() -> Result<()> {
 }
 
 /// 测试单个语言工具
-async fn test_single_language_tool(language: &str, package: &str) -> Result<()> {
-    // 使用CLI优先策略
-    let tool = EnhancedLanguageTool::new(language.to_string(), DocumentStrategy::CLIPrimary).await?;
+async fn test_single_language_tool(language: &str, package: &str, doc_processor: Arc<EnhancedDocumentProcessor>) -> Result<()> {
+    // 使用新的构造函数签名
+    let tool = EnhancedLanguageTool::new(language, doc_processor).await?;
     
     let docs = tool.get_package_docs(package, None, Some("documentation")).await?;
     
@@ -220,6 +234,74 @@ async fn test_single_language_tool(language: &str, package: &str) -> Result<()> 
     
     if let Some(installation) = docs.get("installation") {
         println!("      📦 安装命令: {}", installation);
+    }
+    
+    Ok(())
+}
+
+/// 测试Flutter专用工具
+async fn test_flutter_docs_tool() -> Result<()> {
+    let tool = FlutterDocsTool::new();
+    
+    // 测试1: Widget文档
+    println!("  🔧 测试Widget文档获取");
+    let widget_params = json!({
+        "widget_name": "Container",
+        "include_samples": true
+    });
+    
+    match tool.execute(widget_params).await {
+        Ok(result) => {
+            println!("    ✅ Container Widget文档获取成功");
+            if let Some(examples) = result.get("examples") {
+                if let Some(examples_array) = examples.as_array() {
+                    println!("      📝 包含 {} 个示例", examples_array.len());
+                }
+            }
+            if let Some(tips) = result.get("performance_tips") {
+                if let Some(tips_array) = tips.as_array() {
+                    println!("      💡 包含 {} 个性能提示", tips_array.len());
+                }
+            }
+        }
+        Err(e) => {
+            warn!("    ⚠️ Widget文档获取失败: {}", e);
+        }
+    }
+    
+    // 测试2: 包文档
+    println!("  🔧 测试pub.dev包文档获取");
+    let package_params = json!({
+        "package": "http",
+        "include_samples": true
+    });
+    
+    match tool.execute(package_params).await {
+        Ok(result) => {
+            println!("    ✅ http包文档获取成功");
+            if let Some(source) = result.get("source") {
+                println!("      📚 文档源: {}", source);
+            }
+        }
+        Err(e) => {
+            warn!("    ⚠️ 包文档获取失败: {}", e);
+        }
+    }
+    
+    // 测试3: 基础Flutter文档
+    println!("  🔧 测试基础Flutter文档");
+    let basic_params = json!({});
+    
+    match tool.execute(basic_params).await {
+        Ok(result) => {
+            println!("    ✅ 基础Flutter文档获取成功");
+            if let Some(platform_support) = result.get("platform_support") {
+                println!("      🌐 平台支持信息已获取");
+            }
+        }
+        Err(e) => {
+            warn!("    ⚠️ 基础文档获取失败: {}", e);
+        }
     }
     
     Ok(())
@@ -238,6 +320,9 @@ async fn test_cli_tools_availability() -> Result<()> {
         ("pnpm", "pnpm包管理器"),
         ("poetry", "Poetry Python包管理器"),
         ("conda", "Conda包管理器"),
+        ("flutter", "Flutter开发工具"),
+        ("dart", "Dart语言工具"),
+        ("pub", "Dart包管理器"),
     ];
     
     println!("  🔍 检测本地CLI工具...");
@@ -258,8 +343,12 @@ async fn test_cli_tools_availability() -> Result<()> {
 
 /// 测试HTTP后备功能
 async fn test_http_fallback() -> Result<()> {
-    // 测试仅HTTP策略
-    let tool = EnhancedLanguageTool::new("rust".to_string(), DocumentStrategy::HTTPOnly).await?;
+    // 创建必需的依赖
+    let vector_tool = Arc::new(VectorDocsTool::new()?);
+    let doc_processor = Arc::new(EnhancedDocumentProcessor::new(vector_tool).await?);
+    
+    // 使用新的构造函数签名
+    let tool = EnhancedLanguageTool::new("rust", doc_processor).await?;
     
     match tool.get_package_docs("serde", None, Some("serialization")).await {
         Ok(docs) => {

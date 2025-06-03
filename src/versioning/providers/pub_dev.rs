@@ -10,11 +10,7 @@ pub struct PubDevProvider {
 }
 
 impl PubDevProvider {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-        }
-    }
+    // 移除未使用的new方法
 }
 
 #[async_trait]

@@ -9,14 +9,6 @@ pub struct GoProvider {
     client: Client,
 }
 
-impl GoProvider {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-        }
-    }
-}
-
 #[async_trait]
 impl crate::versioning::traits::PackageProvider for GoProvider {
     async fn get_package_info(&self, package_name: &str) -> Result<Package> {

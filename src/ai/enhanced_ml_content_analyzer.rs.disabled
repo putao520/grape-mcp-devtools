@@ -1,0 +1,403 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use crate::ai::ai_service::{AIService, AIRequest};
+use crate::tools::docs::openai_vectorizer::OpenAIVectorizer;
+use crate::tools::docs::doc_traits::DocumentVectorizer;
+
+/// 增强型ML内容分析器，充分利用项目已有的AI服务
+pub struct EnhancedMLContentAnalyzer {
+    /// AI服务实例，用于语义分析
+    ai_service: AIService,
+    /// 向量化器，用于语义嵌入
+    vectorizer: OpenAIVectorizer,
+    /// 统计分析器作为备选方案
+    fallback_analyzer: Option<super::ml_content_analyzer::MLContentAnalyzer>,
+}
+
+/// 增强型分析结果，包含AI驱动的洞察
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedAnalysisResult {
+    /// 基础特征
+    pub basic_features: super::ml_content_analyzer::DocumentFeatures,
+    /// AI生成的质量评分和详细分析
+    pub ai_quality_analysis: AIQualityAnalysis,
+    /// 语义向量表示
+    pub semantic_embedding: Vec<f32>,
+    /// AI提取的主题和标签
+    pub ai_topics: Vec<String>,
+    /// AI生成的改进建议
+    pub ai_recommendations: Vec<String>,
+    /// 语义相似度得分（与查询的匹配程度）
+    pub semantic_relevance: f32,
+    /// 综合得分（结合统计和AI分析）
+    pub composite_score: f64,
+}
+
+/// AI驱动的质量分析
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AIQualityAnalysis {
+    /// 内容质量得分 (1-10)
+    pub quality_score: f64,
+    /// 清晰度评估
+    pub clarity_score: f64,
+    /// 技术深度评估
+    pub technical_depth: f64,
+    /// 实用性评估
+    pub usefulness_score: f64,
+    /// AI生成的质量评估详情
+    pub quality_explanation: String,
+}
+
+impl EnhancedMLContentAnalyzer {
+    /// 创建新的增强型分析器
+    pub async fn new() -> Result<Self> {
+        let ai_service = AIService::from_env()?;
+        let vectorizer = OpenAIVectorizer::from_env()?;
+        let fallback_analyzer = Some(super::ml_content_analyzer::MLContentAnalyzer::new());
+
+        Ok(Self {
+            ai_service,
+            vectorizer,
+            fallback_analyzer,
+        })
+    }
+
+    /// 执行全面的内容分析
+    pub async fn analyze_content_enhanced(
+        &self,
+        content: &str,
+        context: Option<&str>,
+        target_query: Option<&str>
+    ) -> Result<EnhancedAnalysisResult> {
+        tracing::info!("🤖 开始AI增强内容分析，内容长度: {} 字符", content.len());
+
+        // 1. 基础统计分析（作为基准）
+        let basic_features = self.extract_basic_features(content).await?;
+
+        // 2. AI驱动的质量分析
+        let ai_quality_analysis = self.ai_quality_analysis(content, context).await?;
+
+        // 3. 生成语义嵌入向量
+        let semantic_embedding = self.vectorizer.vectorize(content).await?;
+
+        // 4. AI主题提取
+        let ai_topics = self.ai_topic_extraction(content).await?;
+
+        // 5. AI生成改进建议
+        let ai_recommendations = self.ai_generate_recommendations(content, &ai_quality_analysis).await?;
+
+        // 6. 计算语义相关性（如果提供了目标查询）
+        let semantic_relevance = if let Some(query) = target_query {
+            self.calculate_semantic_relevance(content, query).await?
+        } else {
+            0.5 // 默认中等相关性
+        };
+
+        // 7. 计算综合得分
+        let composite_score = self.calculate_composite_score(
+            &basic_features,
+            &ai_quality_analysis,
+            semantic_relevance
+        );
+
+        Ok(EnhancedAnalysisResult {
+            basic_features,
+            ai_quality_analysis,
+            semantic_embedding,
+            ai_topics,
+            ai_recommendations,
+            semantic_relevance,
+            composite_score,
+        })
+    }
+
+    /// AI驱动的质量分析
+    async fn ai_quality_analysis(&self, content: &str, context: Option<&str>) -> Result<AIQualityAnalysis> {
+        let system_prompt = r#"你是一个专业的技术文档质量评估专家。请从以下几个维度分析给定的技术文档：
+
+1. 内容质量 (1-10分): 信息的准确性、完整性和价值
+2. 清晰度 (1-10分): 表达的清晰程度和易理解性  
+3. 技术深度 (1-10分): 技术内容的深度和专业性
+4. 实用性 (1-10分): 对读者的实际帮助程度
+
+请提供JSON格式的评估结果，包含具体分数和详细解释。"#;
+
+        let context_info = if let Some(ctx) = context {
+            format!("\n\n上下文信息: {}", ctx)
+        } else {
+            String::new()
+        };
+
+        let user_message = format!(
+            "请分析以下技术文档：\n\n{}{}\n\n请提供JSON格式的评估结果。",
+            content, context_info
+        );
+
+        let ai_request = AIRequest {
+            model: None, // 使用默认模型
+            system_prompt: Some(system_prompt.to_string()),
+            user_message,
+            temperature: Some(0.3), // 较低温度保证一致性
+            max_tokens: Some(1000),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        
+        // 解析AI响应
+        self.parse_ai_quality_response(&ai_response.content)
+    }
+
+    /// 解析AI质量分析响应
+    fn parse_ai_quality_response(&self, response: &str) -> Result<AIQualityAnalysis> {
+        // 尝试提取JSON内容
+        if let Some(json_start) = response.find('{') {
+            if let Some(json_end) = response.rfind('}') {
+                let json_str = &response[json_start..=json_end];
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    return Ok(AIQualityAnalysis {
+                        quality_score: parsed["quality_score"].as_f64().unwrap_or(5.0),
+                        clarity_score: parsed["clarity_score"].as_f64().unwrap_or(5.0),
+                        technical_depth: parsed["technical_depth"].as_f64().unwrap_or(5.0),
+                        usefulness_score: parsed["usefulness_score"].as_f64().unwrap_or(5.0),
+                        quality_explanation: parsed["explanation"].as_str()
+                            .unwrap_or("AI分析结果")
+                            .to_string(),
+                    });
+                }
+            }
+        }
+
+        // 如果JSON解析失败，使用文本分析作为备选
+        self.fallback_parse_quality_response(response)
+    }
+
+    /// 备选的质量响应解析
+    fn fallback_parse_quality_response(&self, response: &str) -> Result<AIQualityAnalysis> {
+        // 使用正则表达式或关键词提取分数
+        let quality_score = self.extract_score_from_text(response, "质量").unwrap_or(6.0);
+        let clarity_score = self.extract_score_from_text(response, "清晰").unwrap_or(6.0);
+        let technical_depth = self.extract_score_from_text(response, "技术深度").unwrap_or(6.0);
+        let usefulness_score = self.extract_score_from_text(response, "实用").unwrap_or(6.0);
+
+        Ok(AIQualityAnalysis {
+            quality_score,
+            clarity_score,
+            technical_depth,
+            usefulness_score,
+            quality_explanation: response.to_string(),
+        })
+    }
+
+    /// 从文本中提取分数
+    fn extract_score_from_text(&self, text: &str, keyword: &str) -> Option<f64> {
+        let text_lower = text.to_lowercase();
+        let keyword_lower = keyword.to_lowercase();
+        
+        // 查找包含关键词的句子，然后提取数字
+        if let Some(pos) = text_lower.find(&keyword_lower) {
+            let search_area = &text_lower[pos..std::cmp::min(pos + 100, text_lower.len())];
+            
+            // 查找数字模式 X/10, X分, X.X等
+            use regex::Regex;
+            if let Ok(re) = Regex::new(r"(\d+(?:\.\d+)?)\s*[/分]?\s*(?:10|分|点)") {
+                if let Some(captures) = re.find(search_area) {
+                    if let Ok(score) = captures.as_str().split_whitespace()
+                        .find(|s| s.chars().any(|c| c.is_ascii_digit()))
+                        .unwrap_or("0")
+                        .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.')
+                        .parse::<f64>() {
+                        return Some(score.min(10.0).max(1.0));
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+
+    /// AI主题提取
+    async fn ai_topic_extraction(&self, content: &str) -> Result<Vec<String>> {
+        let system_prompt = "你是一个专业的技术文档主题提取专家。请从给定的技术文档中提取5-10个最重要的主题标签。返回JSON数组格式的结果。";
+
+        let user_message = format!(
+            "请从以下技术文档中提取主要主题标签：\n\n{}\n\n请返回JSON数组格式，例如：[\"Rust编程\", \"Web开发\", \"API设计\"]",
+            content
+        );
+
+        let ai_request = AIRequest {
+            model: None,
+            system_prompt: Some(system_prompt.to_string()),
+            user_message,
+            temperature: Some(0.2),
+            max_tokens: Some(500),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        self.parse_ai_topics_response(&ai_response.content)
+    }
+
+    /// 解析AI主题响应
+    fn parse_ai_topics_response(&self, response: &str) -> Result<Vec<String>> {
+        // 尝试解析JSON数组
+        if let Some(json_start) = response.find('[') {
+            if let Some(json_end) = response.rfind(']') {
+                let json_str = &response[json_start..=json_end];
+                if let Ok(topics) = serde_json::from_str::<Vec<String>>(json_str) {
+                    return Ok(topics);
+                }
+            }
+        }
+
+        // 备选方案：从文本中提取主题
+        let topics = response
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.len() > 2 && trimmed.len() < 50 {
+                    Some(trimmed.trim_matches(|c: char| !c.is_alphanumeric() && !c.is_whitespace()).to_string())
+                } else {
+                    None
+                }
+            })
+            .take(10)
+            .collect();
+
+        Ok(topics)
+    }
+
+    /// AI生成改进建议
+    async fn ai_generate_recommendations(
+        &self,
+        content: &str,
+        quality_analysis: &AIQualityAnalysis
+    ) -> Result<Vec<String>> {
+        let system_prompt = "你是一个专业的技术写作顾问。基于文档质量分析结果，请提供3-5条具体的改进建议。";
+
+        let user_message = format!(
+            "文档内容：\n{}\n\n质量分析：\n- 内容质量: {}/10\n- 清晰度: {}/10\n- 技术深度: {}/10\n- 实用性: {}/10\n\n请提供具体的改进建议（JSON数组格式）。",
+            content,
+            quality_analysis.quality_score,
+            quality_analysis.clarity_score,
+            quality_analysis.technical_depth,
+            quality_analysis.usefulness_score
+        );
+
+        let ai_request = AIRequest {
+            model: None,
+            system_prompt: Some(system_prompt.to_string()),
+            user_message,
+            temperature: Some(0.4),
+            max_tokens: Some(800),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        self.parse_ai_recommendations_response(&ai_response.content)
+    }
+
+    /// 解析AI建议响应
+    fn parse_ai_recommendations_response(&self, response: &str) -> Result<Vec<String>> {
+        // 类似主题解析的逻辑
+        if let Some(json_start) = response.find('[') {
+            if let Some(json_end) = response.rfind(']') {
+                let json_str = &response[json_start..=json_end];
+                if let Ok(recommendations) = serde_json::from_str::<Vec<String>>(json_str) {
+                    return Ok(recommendations);
+                }
+            }
+        }
+
+        // 备选：提取编号列表
+        let recommendations = response
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.len() > 10 && (
+                    trimmed.starts_with("1.") || 
+                    trimmed.starts_with("2.") || 
+                    trimmed.starts_with("3.") ||
+                    trimmed.starts_with("4.") ||
+                    trimmed.starts_with("5.") ||
+                    trimmed.starts_with("-") ||
+                    trimmed.starts_with("•")
+                ) {
+                    Some(trimmed.trim_start_matches(|c: char| c.is_numeric() || c == '.' || c == '-' || c == '•').trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .take(5)
+            .collect();
+
+        Ok(recommendations)
+    }
+
+    /// 计算语义相关性
+    async fn calculate_semantic_relevance(&self, content: &str, query: &str) -> Result<f32> {
+        let content_embedding = self.vectorizer.vectorize(content).await?;
+        let query_embedding = self.vectorizer.vectorize(query).await?;
+        
+        Ok(self.vectorizer.calculate_similarity(&content_embedding, &query_embedding))
+    }
+
+    /// 提取基础特征（复用现有实现）
+    async fn extract_basic_features(&self, content: &str) -> Result<super::ml_content_analyzer::DocumentFeatures> {
+        if let Some(ref fallback) = self.fallback_analyzer {
+            let result = fallback.analyze_content(content, None).await?;
+            Ok(result.features)
+        } else {
+            // 如果没有备选分析器，创建基础特征
+            Ok(super::ml_content_analyzer::DocumentFeatures {
+                word_count: content.split_whitespace().count(),
+                sentence_count: content.matches(&['.', '!', '?'][..]).count(),
+                paragraph_count: content.split("\n\n").count(),
+                avg_word_length: content.split_whitespace()
+                    .map(|w| w.len())
+                    .sum::<usize>() as f64 / content.split_whitespace().count().max(1) as f64,
+                avg_sentence_length: content.split_whitespace().count() as f64 / content.matches(&['.', '!', '?'][..]).count().max(1) as f64,
+                code_block_count: content.matches("```").count() / 2,
+                link_count: content.matches("http").count(),
+                heading_count: content.matches('#').count(),
+                complexity_score: content.len() as f64 / 100.0, // 简化计算
+                readability_score: 50.0, // 默认值
+            })
+        }
+    }
+
+    /// 计算综合得分
+    fn calculate_composite_score(
+        &self,
+        basic_features: &super::ml_content_analyzer::DocumentFeatures,
+        ai_analysis: &AIQualityAnalysis,
+        semantic_relevance: f32
+    ) -> f64 {
+        // 权重配置
+        let basic_weight = 0.2;  // 基础统计特征权重
+        let ai_weight = 0.6;     // AI分析权重
+        let semantic_weight = 0.2; // 语义相关性权重
+
+        // 基础得分（标准化到0-10）
+        let basic_score = (basic_features.word_count.min(1000) as f64 / 100.0 +
+                          basic_features.code_block_count as f64 +
+                          basic_features.heading_count as f64).min(10.0);
+
+        // AI得分（已经是0-10范围）
+        let ai_score = (ai_analysis.quality_score + 
+                       ai_analysis.clarity_score + 
+                       ai_analysis.technical_depth + 
+                       ai_analysis.usefulness_score) / 4.0;
+
+        // 语义得分（0-1范围，转换为0-10）
+        let semantic_score = semantic_relevance as f64 * 10.0;
+
+        // 计算加权综合得分
+        let composite = basic_score * basic_weight + 
+                       ai_score * ai_weight + 
+                       semantic_score * semantic_weight;
+
+        composite.min(10.0).max(0.0)
+    }
+} 

@@ -1,25 +1,262 @@
-use std::sync::Arc;
-use std::path::PathBuf;
 use anyhow::{anyhow, Result};
-use tokio::process::Command as AsyncCommand;
-use tokio::fs as async_fs;
 use tracing::{info, warn, debug, error};
-use uuid::Uuid;
-use reqwest::Client;
-use regex::Regex;
 
 use crate::tools::base::{FileDocumentFragment, MCPTool};
-use crate::vectorization::embeddings::{FileVectorizerImpl, EmbeddingConfig, VectorizationConfig};
 use crate::tools::vector_docs_tool::VectorDocsTool;
+
+/// 内容提取配置
+#[derive(Debug, Clone)]
+pub struct ExtractionConfig {
+    pub min_content_length: usize,
+    pub max_content_length: usize,
+    pub enable_js_rendering: bool,
+    pub quality_threshold: f32,
+    pub preserve_code_blocks: bool,
+    pub extract_links: bool,
+}
+
+/// 增强内容提取器 - 简化但功能完整的实现
+pub struct EnhancedContentExtractor {
+    client: reqwest::Client,
+    config: ExtractionConfig,
+}
+
+/// 提取结果
+#[derive(Debug, Clone)]
+pub struct ExtractedContent {
+    pub title: String,
+    pub content: String,
+    pub code_blocks: Vec<CodeBlock>,
+    pub api_docs: Vec<ApiDoc>,
+    pub links: Vec<Link>,
+}
+
+/// 代码块
+#[derive(Debug, Clone)]
+pub struct CodeBlock {
+    pub language: Option<String>,
+    pub code: String,
+}
+
+/// API文档
+#[derive(Debug, Clone)]
+pub struct ApiDoc {
+    pub title: String,
+    pub content: String,
+}
+
+/// 链接
+#[derive(Debug, Clone)]
+pub struct Link {
+    pub text: String,
+    pub url: String,
+}
+
+impl EnhancedContentExtractor {
+    pub async fn new(config: ExtractionConfig) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .build()?;
+        
+        Ok(Self {
+            client,
+            config,
+        })
+    }
+    
+    pub async fn extract_content(&self, url: &str) -> Result<ExtractedContent> {
+        info!("🔍 使用增强提取器处理URL: {}", url);
+        
+        // 获取网页内容
+        let response = self.client.get(url).send().await?;
+        let html = response.text().await?;
+        
+        // 解析HTML
+        let document = scraper::Html::parse_document(&html);
+        
+        // 提取标题
+        let title = self.extract_title(&document);
+        
+        // 提取主要内容
+        let content = self.extract_main_content(&document);
+        
+        // 提取代码块
+        let code_blocks = self.extract_code_blocks(&document);
+        
+        // 提取API文档
+        let api_docs = self.extract_api_docs(&document);
+        
+        // 提取链接
+        let links = self.extract_links(&document, url);
+        
+        Ok(ExtractedContent {
+            title,
+            content,
+            code_blocks,
+            api_docs,
+            links,
+        })
+    }
+    
+    fn extract_title(&self, document: &scraper::Html) -> String {
+        let title_selector = scraper::Selector::parse("title").unwrap();
+        document
+            .select(&title_selector)
+            .next()
+            .map(|element| element.text().collect::<String>().trim().to_string())
+            .unwrap_or_else(|| "Untitled".to_string())
+    }
+    
+    fn extract_main_content(&self, document: &scraper::Html) -> String {
+        // 尝试多种内容选择器
+        let content_selectors = [
+            "main", "article", ".content", "#content", 
+            ".main-content", ".documentation", ".docs"
+        ];
+        
+        for selector_str in &content_selectors {
+            if let Ok(selector) = scraper::Selector::parse(selector_str) {
+                if let Some(element) = document.select(&selector).next() {
+                    let text = element.text().collect::<Vec<_>>().join(" ");
+                    if text.len() >= self.config.min_content_length {
+                        return self.clean_text(&text);
+                    }
+                }
+            }
+        }
+        
+        // 如果没有找到特定内容区域，提取body内容
+        let body_selector = scraper::Selector::parse("body").unwrap();
+        if let Some(body) = document.select(&body_selector).next() {
+            let text = body.text().collect::<Vec<_>>().join(" ");
+            return self.clean_text(&text);
+        }
+        
+        "No content found".to_string()
+    }
+    
+    fn extract_code_blocks(&self, document: &scraper::Html) -> Vec<CodeBlock> {
+        let mut code_blocks = Vec::new();
+        
+        // 提取 <pre><code> 块
+        let pre_code_selector = scraper::Selector::parse("pre code").unwrap();
+        for element in document.select(&pre_code_selector) {
+            let code = element.text().collect::<String>();
+            let language = element
+                .value()
+                .attr("class")
+                .and_then(|class| {
+                    class.split_whitespace()
+                        .find(|c| c.starts_with("language-"))
+                        .map(|c| c.strip_prefix("language-").unwrap().to_string())
+                });
+            
+            code_blocks.push(CodeBlock { language, code });
+        }
+        
+        // 提取单独的 <code> 块
+        let code_selector = scraper::Selector::parse("code").unwrap();
+        for element in document.select(&code_selector) {
+            // 检查父元素是否为pre标签
+            let is_in_pre = element.parent()
+                .and_then(|parent| parent.value().as_element())
+                .map(|elem| elem.name() == "pre")
+                .unwrap_or(false);
+                
+            if !is_in_pre {
+                let code = element.text().collect::<String>();
+                if code.len() > 10 { // 只保留较长的代码片段
+                    code_blocks.push(CodeBlock { 
+                        language: None, 
+                        code 
+                    });
+                }
+            }
+        }
+        
+        code_blocks
+    }
+    
+    fn extract_api_docs(&self, document: &scraper::Html) -> Vec<ApiDoc> {
+        let mut api_docs = Vec::new();
+        
+        // 查找API相关的section
+        let api_selectors = [
+            ".api-doc", ".method", ".function", ".endpoint",
+            "[data-api]", ".reference"
+        ];
+        
+        for selector_str in &api_selectors {
+            if let Ok(selector) = scraper::Selector::parse(selector_str) {
+                for element in document.select(&selector) {
+                    let title = element
+                        .select(&scraper::Selector::parse("h1, h2, h3, h4, .title").unwrap())
+                        .next()
+                        .map(|h| h.text().collect::<String>())
+                        .unwrap_or_else(|| "API Documentation".to_string());
+                    
+                    let content = element.text().collect::<Vec<_>>().join(" ");
+                    
+                    if content.len() > 50 {
+                        api_docs.push(ApiDoc {
+                            title: self.clean_text(&title),
+                            content: self.clean_text(&content),
+                        });
+                    }
+                }
+            }
+        }
+        
+        api_docs
+    }
+    
+    fn extract_links(&self, document: &scraper::Html, base_url: &str) -> Vec<Link> {
+        let mut links = Vec::new();
+        let link_selector = scraper::Selector::parse("a[href]").unwrap();
+        
+        for element in document.select(&link_selector) {
+            if let Some(href) = element.value().attr("href") {
+                let text = element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() && text.len() < 200 {
+                    let url = self.resolve_url(href, base_url);
+                    links.push(Link { text, url });
+                }
+            }
+        }
+        
+        links
+    }
+    
+    fn clean_text(&self, text: &str) -> String {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string()
+    }
+    
+    fn resolve_url(&self, href: &str, base_url: &str) -> String {
+        if href.starts_with("http") {
+            href.to_string()
+        } else if href.starts_with('/') {
+            if let Ok(base) = url::Url::parse(base_url) {
+                format!("{}://{}{}", base.scheme(), base.host_str().unwrap_or(""), href)
+            } else {
+                href.to_string()
+            }
+        } else {
+            format!("{}/{}", base_url.trim_end_matches('/'), href)
+        }
+    }
+}
 
 /// 文档处理器 - 统一处理文档生成、向量化和存储
 pub struct DocumentProcessor {
-    /// 向量化器
-    _vectorizer: Arc<FileVectorizerImpl>,
     /// 工作目录
-    _work_dir: PathBuf,
+    _work_dir: std::path::PathBuf,
     /// HTTP客户端
-    client: Client,
+    client: reqwest::Client,
     vector_tool: VectorDocsTool,
 }
 
@@ -28,23 +265,66 @@ impl DocumentProcessor {
     pub async fn new() -> Result<Self> {
         let vector_tool = VectorDocsTool::new()?;
         
-        // 创建向量化器配置
-        let embedding_config = EmbeddingConfig::from_env()?;
-        let vectorization_config = VectorizationConfig::from_env()?;
-        
         // 创建工作目录
         let work_dir = std::env::temp_dir().join("grape-mcp-docs");
         std::fs::create_dir_all(&work_dir)?;
         
-        // 异步创建向量化器
-        let vectorizer = Arc::new(FileVectorizerImpl::new(embedding_config, vectorization_config).await?);
-        
         Ok(Self {
-            _vectorizer: vectorizer,
             _work_dir: work_dir,
-            client: Client::new(),
+            client: reqwest::Client::new(),
             vector_tool,
         })
+    }
+
+    /// 提取网页内容
+    async fn extract_web_content(&self, url: &str) -> Result<String> {
+        info!("🔍 提取网页内容: {}", url);
+
+        // 使用增强内容提取器
+        let config = ExtractionConfig {
+            min_content_length: 200,
+            max_content_length: 10000,
+            enable_js_rendering: false,
+            quality_threshold: 0.7,
+            preserve_code_blocks: true,
+            extract_links: true,
+        };
+
+        let extractor = EnhancedContentExtractor::new(config).await?;
+        let result = extractor.extract_content(url).await?;
+
+        let mut content = format!("# {}\n\n", result.title);
+        content.push_str(&result.content);
+
+        // 添加代码块
+        if !result.code_blocks.is_empty() {
+            content.push_str("\n\n## 代码示例\n\n");
+            for code_block in &result.code_blocks {
+                if let Some(ref lang) = code_block.language {
+                    content.push_str(&format!("```{}\n{}\n```\n\n", lang, code_block.code));
+                } else {
+                    content.push_str(&format!("```\n{}\n```\n\n", code_block.code));
+                }
+            }
+        }
+
+        // 添加API文档
+        if !result.api_docs.is_empty() {
+            content.push_str("\n\n## API文档\n\n");
+            for api_doc in &result.api_docs {
+                content.push_str(&format!("### {}\n{}\n\n", api_doc.title, api_doc.content));
+            }
+        }
+
+        // 添加相关链接
+        if !result.links.is_empty() {
+            content.push_str("\n\n## 相关链接\n\n");
+            for link in &result.links {
+                content.push_str(&format!("- [{}]({})\n", link.text, link.url));
+            }
+        }
+
+        Ok(content)
     }
 
     /// 处理文档请求的主要入口点
@@ -64,28 +344,58 @@ impl DocumentProcessor {
     ) -> Result<Vec<FileDocumentFragment>> {
         let version = version.unwrap_or("latest");
         
-        info!("处理文档请求: {} {} {} - 查询: {}", language, package_name, version, query);
+        info!("📋 处理文档请求: {} {} {} - 查询: {}", language, package_name, version, query);
         
         // 1. 首先尝试从向量库搜索现有文档
         if let Ok(search_results) = self.search_existing_docs(language, package_name, version, query).await {
             if !search_results.is_empty() {
-                info!("从向量库找到 {} 个相关文档", search_results.len());
+                info!("✅ 从向量库找到 {} 个相关文档", search_results.len());
                 return Ok(search_results);
             }
         }
         
-        // 2. 如果没有找到，生成新文档
-        info!("向量库中没有找到相关文档，开始生成新文档");
-        let fragments = self.generate_docs(language, package_name, version).await?;
+        info!("🔄 向量库中没有找到相关文档，开始生成新文档");
         
-        // 3. 向量化并存储文档
-        self.vectorize_and_store_docs(&fragments).await?;
+        // 2. 生成新文档
+        let fragments = match self.generate_docs(language, package_name, version).await {
+            Ok(frags) => {
+                info!("✅ 成功生成 {} 个文档片段", frags.len());
+                frags
+            }
+            Err(e) => {
+                error!("❌ 文档生成失败: {}", e);
+                
+                // 创建一个基本的错误文档片段，确保总是返回一些内容
+                warn!("🔄 创建基本错误文档片段作为最终回退");
+                vec![FileDocumentFragment::new(
+                    language.to_string(),
+                    package_name.to_string(),
+                    version.to_string(),
+                    "error_fallback.md".to_string(),
+                    format!(
+                        "# {} Package: {}\n\nVersion: {}\n\n## Error Information\n\n文档生成过程中遇到错误: {}\n\n## Suggested Actions\n\n1. 检查网络连接\n2. 验证包名是否正确\n3. 确认相关CLI工具已安装\n4. 查看官方文档站点\n\n## Query\n\n搜索查询: {}\n\n> 这是一个错误回退文档。建议手动查找相关文档。",
+                        language, package_name, version, e, query
+                    ),
+                )]
+            }
+        };
         
-        // 4. 再次搜索以返回相关结果
-        let search_results = self.search_existing_docs(language, package_name, version, query).await
-            .unwrap_or_else(|_| fragments.clone());
+        // 3. 尝试向量化并存储文档
+        if let Err(e) = self.vectorize_and_store_docs(&fragments).await {
+            warn!("⚠️  向量化存储失败: {}", e);
+        }
         
-        Ok(search_results)
+        // 4. 尝试再次搜索，如果失败则直接返回生成的片段
+        match self.search_existing_docs(language, package_name, version, query).await {
+            Ok(search_results) if !search_results.is_empty() => {
+                info!("✅ 向量搜索成功，返回 {} 个搜索结果", search_results.len());
+                Ok(search_results)
+            }
+            _ => {
+                info!("⚠️  向量搜索失败或返回空结果，直接返回生成的 {} 个文档片段", fragments.len());
+                Ok(fragments)
+            }
+        }
     }
     
     /// 搜索现有文档
@@ -191,11 +501,36 @@ impl DocumentProcessor {
         
         // 1. 首先尝试使用go CLI工具
         if let Ok(fragments) = self.generate_go_docs_with_cli(package_name, version).await {
+            info!("✅ 使用Go CLI成功生成文档");
             return Ok(fragments);
         }
         
+        info!("⚠️  Go CLI方法失败，尝试API方法");
+        
         // 2. 回退到pkg.go.dev API
-        self.generate_go_docs_with_api(package_name, version).await
+        match self.generate_go_docs_with_api(package_name, version).await {
+            Ok(fragments) => {
+                info!("✅ 使用Go API成功生成文档");
+                Ok(fragments)
+            }
+            Err(e) => {
+                warn!("Go API方法也失败: {}", e);
+                
+                // 3. 最后的回退：创建基本文档片段
+                info!("🔄 创建基本Go文档片段作为最后回退");
+                let basic_fragment = FileDocumentFragment::new(
+                    "go".to_string(),
+                    package_name.to_string(),
+                    version.to_string(),
+                    "basic_go_docs.md".to_string(),
+                    format!(
+                        "# Go Package: {}\n\nVersion: {}\n\n## Package Information\n\nThis is a Go package. For detailed documentation, please visit:\n- [pkg.go.dev](https://pkg.go.dev/{})\n- [Go Documentation](https://golang.org/doc/)\n\n## Installation\n\n```go\nimport \"{}\"\n```\n\n## Basic Usage\n\n```go\npackage main\n\nimport (\n    \"{}\"\n)\n\nfunc main() {{\n    // Use {} package here\n}}\n```\n\n> **Note**: This is a basic template. For complete documentation, please refer to the official Go documentation.",
+                        package_name, version, package_name, package_name, package_name, package_name
+                    ),
+                );
+                Ok(vec![basic_fragment])
+            }
+        }
     }
     
     /// 使用go CLI生成文档
@@ -203,7 +538,7 @@ impl DocumentProcessor {
         info!("使用go CLI生成文档: {} {}", package_name, version);
         
         // 检查go是否可用
-        let go_check = AsyncCommand::new("go")
+        let go_check = tokio::process::Command::new("go")
             .args(&["version"])
             .output()
             .await;
@@ -213,7 +548,7 @@ impl DocumentProcessor {
         }
         
         // 使用go doc命令
-        let doc_output = AsyncCommand::new("go")
+        let doc_output = tokio::process::Command::new("go")
             .args(&["doc", package_name])
             .output()
             .await?;
@@ -261,7 +596,7 @@ impl DocumentProcessor {
     }
     
     /// 生成Rust文档
-    async fn generate_rust_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
+    pub async fn generate_rust_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
         info!("生成Rust文档: {} {}", package_name, version);
         
         // 1. 首先尝试使用cargo CLI工具
@@ -278,7 +613,7 @@ impl DocumentProcessor {
         info!("使用cargo CLI生成文档: {} {}", package_name, version);
         
         // 检查cargo是否可用
-        let cargo_check = AsyncCommand::new("cargo")
+        let cargo_check = tokio::process::Command::new("cargo")
             .args(&["--version"])
             .output()
             .await;
@@ -288,8 +623,8 @@ impl DocumentProcessor {
         }
         
         // 创建临时目录
-        let temp_dir = std::env::temp_dir().join(format!("rust_docs_{}", Uuid::new_v4()));
-        async_fs::create_dir_all(&temp_dir).await?;
+        let temp_dir = std::env::temp_dir().join(format!("rust_docs_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await?;
         
         // 创建简单的Cargo.toml
         let cargo_content = format!(
@@ -304,12 +639,12 @@ edition = "2021"
             package_name, version
         );
         
-        async_fs::write(temp_dir.join("Cargo.toml"), cargo_content).await?;
-        async_fs::create_dir_all(temp_dir.join("src")).await?;
-        async_fs::write(temp_dir.join("src").join("main.rs"), "fn main() {}").await?;
+        tokio::fs::write(temp_dir.join("Cargo.toml"), cargo_content).await?;
+        tokio::fs::create_dir_all(temp_dir.join("src")).await?;
+        tokio::fs::write(temp_dir.join("src").join("main.rs"), "fn main() {}").await?;
         
         // 生成文档
-        let doc_output = AsyncCommand::new("cargo")
+        let doc_output = tokio::process::Command::new("cargo")
             .args(&["doc", "--no-deps"])
             .current_dir(&temp_dir)
             .output()
@@ -328,7 +663,7 @@ edition = "2021"
         );
         
         // 清理临时目录
-        let _ = async_fs::remove_dir_all(&temp_dir).await;
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         
         Ok(vec![fragment])
     }
@@ -364,7 +699,7 @@ edition = "2021"
     }
     
     /// 生成Python文档
-    async fn generate_python_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
+    pub async fn generate_python_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
         info!("生成Python文档: {} {}", package_name, version);
         
         // 1. 首先尝试使用pip CLI
@@ -406,7 +741,7 @@ edition = "2021"
     /// 尝试使用pip CLI
     async fn try_pip_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查pip是否可用
-        let pip_check = AsyncCommand::new("pip")
+        let pip_check = tokio::process::Command::new("pip")
             .args(&["--version"])
             .output()
             .await;
@@ -416,7 +751,7 @@ edition = "2021"
         }
         
         // 使用pip show命令获取包信息
-        let show_output = AsyncCommand::new("pip")
+        let show_output = tokio::process::Command::new("pip")
             .args(&["show", package_name])
             .output()
             .await?;
@@ -428,7 +763,7 @@ edition = "2021"
         let show_content = String::from_utf8_lossy(&show_output.stdout);
         
         // 尝试获取包的依赖信息
-        let deps_output = AsyncCommand::new("pip")
+        let deps_output = tokio::process::Command::new("pip")
             .args(&["show", package_name, "--verbose"])
             .output()
             .await;
@@ -460,7 +795,7 @@ edition = "2021"
     /// 尝试使用poetry CLI
     async fn try_poetry_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查poetry是否可用
-        let poetry_check = AsyncCommand::new("poetry")
+        let poetry_check = tokio::process::Command::new("poetry")
             .args(&["--version"])
             .output()
             .await;
@@ -470,7 +805,7 @@ edition = "2021"
         }
         
         // 使用poetry show命令获取包信息
-        let show_output = AsyncCommand::new("poetry")
+        let show_output = tokio::process::Command::new("poetry")
             .args(&["show", package_name])
             .output()
             .await?;
@@ -498,7 +833,7 @@ edition = "2021"
     /// 尝试使用conda CLI
     async fn try_conda_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查conda是否可用
-        let conda_check = AsyncCommand::new("conda")
+        let conda_check = tokio::process::Command::new("conda")
             .args(&["--version"])
             .output()
             .await;
@@ -508,7 +843,7 @@ edition = "2021"
         }
         
         // 使用conda search命令查找包
-        let search_output = AsyncCommand::new("conda")
+        let search_output = tokio::process::Command::new("conda")
             .args(&["search", package_name])
             .output()
             .await?;
@@ -536,7 +871,7 @@ edition = "2021"
     /// 尝试使用pydoc CLI
     async fn try_pydoc_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查python是否可用
-        let python_check = AsyncCommand::new("python")
+        let python_check = tokio::process::Command::new("python")
             .args(&["--version"])
             .output()
             .await;
@@ -546,7 +881,7 @@ edition = "2021"
         }
         
         // 尝试使用pydoc获取模块文档
-        let pydoc_output = AsyncCommand::new("python")
+        let pydoc_output = tokio::process::Command::new("python")
             .args(&["-m", "pydoc", package_name])
             .output()
             .await?;
@@ -555,7 +890,7 @@ edition = "2021"
             String::from_utf8_lossy(&pydoc_output.stdout).to_string()
         } else {
             // 如果pydoc失败，尝试导入模块获取基本信息
-            let import_output = AsyncCommand::new("python")
+            let import_output = tokio::process::Command::new("python")
                 .args(&["-c", &format!("import {}; print({}.__doc__ or 'No documentation available')", package_name, package_name)])
                 .output()
                 .await;
@@ -611,16 +946,44 @@ edition = "2021"
     }
     
     /// 生成NPM文档
-    async fn generate_npm_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
+    pub async fn generate_npm_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
         info!("生成NPM文档: {} {}", package_name, version);
         
         // 1. 首先尝试使用npm CLI工具
         if let Ok(fragments) = self.generate_npm_docs_with_cli(package_name, version).await {
+            info!("✅ 使用NPM CLI成功生成文档");
             return Ok(fragments);
         }
         
+        info!("⚠️  NPM CLI方法失败，尝试API方法");
+        
         // 2. 回退到NPM API
-        self.generate_npm_docs_with_api(package_name, version).await
+        match self.generate_npm_docs_with_api(package_name, version).await {
+            Ok(fragments) => {
+                info!("✅ 使用NPM API成功生成文档");
+                Ok(fragments)
+            }
+            Err(e) => {
+                warn!("NPM API方法也失败: {}", e);
+                
+                // 3. 最后的回退：创建基本文档片段
+                info!("🔄 创建基本NPM文档片段作为最后回退");
+                let basic_fragment = FileDocumentFragment::new(
+                    "javascript".to_string(),
+                    package_name.to_string(),
+                    version.to_string(),
+                    "basic_npm_docs.md".to_string(),
+                    format!(
+                        "# NPM Package: {}\n\nVersion: {}\n\n## Package Information\n\nThis is an NPM package. For detailed documentation, please visit:\n- [npmjs.com](https://www.npmjs.com/package/{})\n- [Node.js Documentation](https://nodejs.org/docs/)\n\n## Installation\n\n```bash\nnpm install {}@{}\n```\n\n```bash\nyarn add {}@{}\n```\n\n## Basic Usage\n\n```javascript\nconst {} = require('{}');\n\n// Use {} here\nconsole.log({});\n```\n\n```javascript\nimport {} from '{}';\n\n// Use {} here\nconsole.log({});\n```\n\n> **Note**: This is a basic template. For complete documentation, please refer to the official NPM package page.",
+                        package_name, version, package_name, package_name, version, package_name, version, 
+                        package_name.replace("-", "_"), package_name, package_name.replace("-", "_"), 
+                        package_name.replace("-", "_"), package_name.replace("-", "_"), package_name, 
+                        package_name.replace("-", "_"), package_name.replace("-", "_")
+                    ),
+                );
+                Ok(vec![basic_fragment])
+            }
+        }
     }
     
     /// 使用npm CLI生成文档
@@ -653,7 +1016,7 @@ edition = "2021"
     /// 尝试使用npm CLI
     async fn try_npm_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查npm是否可用
-        let npm_check = AsyncCommand::new("npm")
+        let npm_check = tokio::process::Command::new("npm")
             .args(&["--version"])
             .output()
             .await;
@@ -663,7 +1026,7 @@ edition = "2021"
         }
         
         // 使用npm view命令获取包信息
-        let view_output = AsyncCommand::new("npm")
+        let view_output = tokio::process::Command::new("npm")
             .args(&["view", package_name, "--json"])
             .output()
             .await?;
@@ -675,7 +1038,7 @@ edition = "2021"
         let view_content = String::from_utf8_lossy(&view_output.stdout);
         
         // 尝试获取包的依赖信息
-        let deps_output = AsyncCommand::new("npm")
+        let deps_output = tokio::process::Command::new("npm")
             .args(&["view", package_name, "dependencies", "--json"])
             .output()
             .await;
@@ -707,7 +1070,7 @@ edition = "2021"
     /// 尝试使用yarn CLI
     async fn try_yarn_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查yarn是否可用
-        let yarn_check = AsyncCommand::new("yarn")
+        let yarn_check = tokio::process::Command::new("yarn")
             .args(&["--version"])
             .output()
             .await;
@@ -717,7 +1080,7 @@ edition = "2021"
         }
         
         // 使用yarn info命令获取包信息
-        let info_output = AsyncCommand::new("yarn")
+        let info_output = tokio::process::Command::new("yarn")
             .args(&["info", package_name, "--json"])
             .output()
             .await?;
@@ -745,7 +1108,7 @@ edition = "2021"
     /// 尝试使用pnpm CLI
     async fn try_pnpm_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查pnpm是否可用
-        let pnpm_check = AsyncCommand::new("pnpm")
+        let pnpm_check = tokio::process::Command::new("pnpm")
             .args(&["--version"])
             .output()
             .await;
@@ -755,7 +1118,7 @@ edition = "2021"
         }
         
         // 使用pnpm view命令获取包信息
-        let view_output = AsyncCommand::new("pnpm")
+        let view_output = tokio::process::Command::new("pnpm")
             .args(&["view", package_name, "--json"])
             .output()
             .await?;
@@ -783,7 +1146,7 @@ edition = "2021"
     /// 尝试使用node CLI
     async fn try_node_cli(&self, package_name: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查node是否可用
-        let node_check = AsyncCommand::new("node")
+        let node_check = tokio::process::Command::new("node")
             .args(&["--version"])
             .output()
             .await;
@@ -798,7 +1161,7 @@ edition = "2021"
             package_name, package_name
         );
         
-        let node_output = AsyncCommand::new("node")
+        let node_output = tokio::process::Command::new("node")
             .args(&["-e", &module_script])
             .output()
             .await?;
@@ -850,7 +1213,7 @@ edition = "2021"
     }
     
     /// 生成Java文档
-    async fn generate_java_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
+    pub async fn generate_java_docs(&self, package_name: &str, version: &str) -> Result<Vec<FileDocumentFragment>> {
         info!("生成Java文档: {} {}", package_name, version);
         
         // 1. 首先尝试使用mvn CLI工具
@@ -896,7 +1259,7 @@ edition = "2021"
     /// 尝试使用mvn CLI
     async fn try_mvn_cli(&self, group_id: &str, artifact_id: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查mvn是否可用
-        let mvn_check = AsyncCommand::new("mvn")
+        let mvn_check = tokio::process::Command::new("mvn")
             .args(&["--version"])
             .output()
             .await;
@@ -906,8 +1269,8 @@ edition = "2021"
         }
         
         // 创建临时目录
-        let temp_dir = std::env::temp_dir().join(format!("java_docs_{}", Uuid::new_v4()));
-        async_fs::create_dir_all(&temp_dir).await?;
+        let temp_dir = std::env::temp_dir().join(format!("java_docs_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await?;
         
         // 创建简单的pom.xml
         let pom_content = format!(
@@ -935,10 +1298,10 @@ edition = "2021"
             group_id, artifact_id, version
         );
         
-        async_fs::write(temp_dir.join("pom.xml"), pom_content).await?;
+        tokio::fs::write(temp_dir.join("pom.xml"), pom_content).await?;
         
         // 使用mvn dependency:resolve命令解析依赖
-        let resolve_output = AsyncCommand::new("mvn")
+        let resolve_output = tokio::process::Command::new("mvn")
             .args(&["dependency:resolve", "-q"])
             .current_dir(&temp_dir)
             .output()
@@ -949,7 +1312,7 @@ edition = "2021"
         }
         
         // 使用mvn dependency:tree获取依赖树
-        let tree_output = AsyncCommand::new("mvn")
+        let tree_output = tokio::process::Command::new("mvn")
             .args(&["dependency:tree", "-q"])
             .current_dir(&temp_dir)
             .output()
@@ -962,7 +1325,7 @@ edition = "2021"
         };
         
         // 清理临时目录
-        let _ = async_fs::remove_dir_all(&temp_dir).await;
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         
         let content = format!(
             "# Java Library {}:{}\n\nVersion: {}\n\n## Maven Information\n\nGroup ID: {}\nArtifact ID: {}\n\n## Dependency Tree\n\n```\n{}\n```\n\n## Installation\n\n### Maven\n```xml\n<dependency>\n    <groupId>{}</groupId>\n    <artifactId>{}</artifactId>\n    <version>{}</version>\n</dependency>\n```\n\n### Gradle\n```gradle\nimplementation '{}:{}:{}'\n```\n\nSource: Maven CLI",
@@ -981,7 +1344,7 @@ edition = "2021"
     /// 尝试使用gradle CLI
     async fn try_gradle_cli(&self, group_id: &str, artifact_id: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查gradle是否可用
-        let gradle_check = AsyncCommand::new("gradle")
+        let gradle_check = tokio::process::Command::new("gradle")
             .args(&["--version"])
             .output()
             .await;
@@ -991,8 +1354,8 @@ edition = "2021"
         }
         
         // 创建临时目录
-        let temp_dir = std::env::temp_dir().join(format!("gradle_docs_{}", Uuid::new_v4()));
-        async_fs::create_dir_all(&temp_dir).await?;
+        let temp_dir = std::env::temp_dir().join(format!("gradle_docs_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await?;
         
         // 创建简单的build.gradle
         let build_gradle_content = format!(
@@ -1011,10 +1374,10 @@ dependencies {{
             group_id, artifact_id, version
         );
         
-        async_fs::write(temp_dir.join("build.gradle"), build_gradle_content).await?;
+        tokio::fs::write(temp_dir.join("build.gradle"), build_gradle_content).await?;
         
         // 使用gradle dependencies命令获取依赖信息
-        let deps_output = AsyncCommand::new("gradle")
+        let deps_output = tokio::process::Command::new("gradle")
             .args(&["dependencies", "--configuration", "compileClasspath", "-q"])
             .current_dir(&temp_dir)
             .output()
@@ -1027,7 +1390,7 @@ dependencies {{
         };
         
         // 清理临时目录
-        let _ = async_fs::remove_dir_all(&temp_dir).await;
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         
         let content = format!(
             "# Java Library {}:{}\n\nVersion: {}\n\n## Gradle Information\n\nGroup ID: {}\nArtifact ID: {}\n\n## Dependencies\n\n```\n{}\n```\n\n## Installation\n\n### Gradle\n```gradle\nimplementation '{}:{}:{}'\n```\n\n### Maven\n```xml\n<dependency>\n    <groupId>{}</groupId>\n    <artifactId>{}</artifactId>\n    <version>{}</version>\n</dependency>\n```\n\nSource: Gradle CLI",
@@ -1046,7 +1409,7 @@ dependencies {{
     /// 尝试使用javadoc CLI
     async fn try_javadoc_cli(&self, group_id: &str, artifact_id: &str, version: &str) -> Result<FileDocumentFragment> {
         // 检查javadoc是否可用
-        let javadoc_check = AsyncCommand::new("javadoc")
+        let javadoc_check = tokio::process::Command::new("javadoc")
             .args(&["-version"])
             .output()
             .await;
@@ -1117,17 +1480,17 @@ dependencies {{
     /// 清理HTML标签，保留文本内容
     fn clean_html(&self, html: &str) -> String {
         // 移除脚本和样式标签及其内容
-        let script_re = Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
-        let style_re = Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
+        let script_re = regex::Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
+        let style_re = regex::Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
         let mut cleaned = script_re.replace_all(html, "").to_string();
         cleaned = style_re.replace_all(&cleaned, "").to_string();
         
         // 移除HTML注释
-        let comment_re = Regex::new(r"(?s)<!--.*?-->").unwrap();
+        let comment_re = regex::Regex::new(r"(?s)<!--.*?-->").unwrap();
         cleaned = comment_re.replace_all(&cleaned, "").to_string();
         
         // 移除所有HTML标签
-        let tag_re = Regex::new(r"<[^>]*>").unwrap();
+        let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
         cleaned = tag_re.replace_all(&cleaned, "").to_string();
         
         // 解码HTML实体
@@ -1140,7 +1503,7 @@ dependencies {{
             .replace("&nbsp;", " ");
         
         // 清理多余的空白字符
-        let space_re = Regex::new(r"\s+").unwrap();
+        let space_re = regex::Regex::new(r"\s+").unwrap();
         let result = space_re.replace_all(&cleaned, " ").trim().to_string();
         
         // 如果清理后内容太短，返回默认内容

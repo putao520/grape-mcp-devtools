@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use anyhow::Result;
 use tracing::{info, debug};
+use scraper::{Html, Selector};
 
 use crate::tools::base::{MCPTool, Schema, SchemaObject, SchemaString};
 use crate::errors::MCPError;
@@ -157,24 +158,91 @@ impl RustDocsTool {
 
     /// 解析docs.rs HTML内容
     fn parse_docs_rs_html(&self, html_content: &str, crate_name: &str, version: Option<&str>) -> Value {
-        // 简化的HTML解析，提取主要信息
-        let title = if html_content.contains(&format!("{} ", crate_name)) {
-            format!("{} - Rust Documentation", crate_name)
-        } else {
-            format!("{} Documentation", crate_name)
-        };
+        // 完整的HTML解析，提取主要信息和结构化内容
+        let document = Html::parse_document(html_content);
+        
+        // 提取标题信息
+        let title_selector = Selector::parse("title, h1").unwrap();
+        let title = document.select(&title_selector)
+            .next()
+            .map(|el| el.text().collect::<String>())
+            .unwrap_or_else(|| "Rust Documentation".to_string());
 
-        // 提取简单的描述信息
-        let description = if let Some(start) = html_content.find("<meta name=\"description\" content=\"") {
-            let start = start + 34;
-            if let Some(end) = html_content[start..].find("\"") {
-                html_content[start..start + end].to_string()
-            } else {
-                format!("Rust crate: {}", crate_name)
+        // 提取主要内容区域
+        let content_selectors = [
+            "main", ".content", "#content", ".main-content", 
+            ".docblock", ".rustdoc", "article", ".documentation"
+        ];
+        
+        let mut main_content = String::new();
+        for selector_str in &content_selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(element) = document.select(&selector).next() {
+                    let content = element.text().collect::<Vec<_>>().join(" ");
+                    if content.len() > main_content.len() {
+                        main_content = content;
+                    }
+                }
             }
-        } else {
-            format!("Rust crate: {}", crate_name)
-        };
+        }
+
+        // 如果没有找到主要内容，使用body
+        if main_content.is_empty() {
+            if let Ok(body_selector) = Selector::parse("body") {
+                if let Some(body) = document.select(&body_selector).next() {
+                    main_content = body.text().collect::<Vec<_>>().join(" ");
+                }
+            }
+        }
+
+        // 提取代码示例
+        let mut code_examples = Vec::new();
+        if let Ok(code_selector) = Selector::parse("pre code, .example-wrap pre, .rust") {
+            for code_element in document.select(&code_selector) {
+                let code_text = code_element.text().collect::<String>();
+                if !code_text.trim().is_empty() && code_text.len() > 10 {
+                    code_examples.push(code_text.trim().to_string());
+                }
+            }
+        }
+
+        // 提取API函数和方法
+        let mut api_items = Vec::new();
+        if let Ok(api_selector) = Selector::parse(".method, .function, .struct, .enum, .trait") {
+            for api_element in document.select(&api_selector) {
+                if let Some(name_element) = api_element.select(&Selector::parse(".name, .ident").unwrap()).next() {
+                    let api_name = name_element.text().collect::<String>();
+                    if !api_name.trim().is_empty() {
+                        api_items.push(api_name.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        // 清理和格式化内容
+        let cleaned_content = self.clean_html_content(&main_content);
+        
+        // 构建结构化文档内容
+        let mut doc_sections = vec![
+            format!("# {}\n", title),
+            format!("## 主要内容\n{}\n", cleaned_content),
+        ];
+
+        if !code_examples.is_empty() {
+            doc_sections.push("## 代码示例\n".to_string());
+            for (i, example) in code_examples.iter().enumerate().take(5) {
+                doc_sections.push(format!("### 示例 {}\n```rust\n{}\n```\n", i + 1, example));
+            }
+        }
+
+        if !api_items.is_empty() {
+            doc_sections.push("## API 项目\n".to_string());
+            for item in api_items.iter().take(20) {
+                doc_sections.push(format!("- {}\n", item));
+            }
+        }
+
+        let full_documentation = doc_sections.join("\n");
 
         json!({
             "crate_name": crate_name,
@@ -182,11 +250,13 @@ impl RustDocsTool {
             "language": "rust",
             "source": "docs.rs",
             "title": title,
-            "description": description,
+            "description": cleaned_content.chars().take(200).collect::<String>() + "...",
             "documentation": {
                 "type": "api_docs",
                 "url": format!("https://docs.rs/{}/", crate_name),
-                "content": description
+                "content": full_documentation,
+                "code_examples": code_examples,
+                "api_items": api_items
             },
             "installation": {
                 "cargo": format!("cargo add {}", crate_name),
@@ -197,6 +267,22 @@ impl RustDocsTool {
                 "docs_rs": format!("https://docs.rs/{}", crate_name)
             }
         })
+    }
+
+    /// 清理HTML内容中的多余空白和特殊字符
+    fn clean_html_content(&self, content: &str) -> String {
+        content
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .filter(|&c| c.is_ascii() || c.is_whitespace())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// 从GitHub获取README

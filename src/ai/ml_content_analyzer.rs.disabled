@@ -1,0 +1,301 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use unicode_segmentation::UnicodeSegmentation;
+
+// 使用简单但有效的统计方法，避免复杂的ML库类型约束问题
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentFeatures {
+    pub word_count: usize,
+    pub sentence_count: usize,
+    pub paragraph_count: usize,
+    pub avg_word_length: f64,
+    pub avg_sentence_length: f64,
+    pub code_block_count: usize,
+    pub link_count: usize,
+    pub heading_count: usize,
+    pub complexity_score: f64,
+    pub readability_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentAnalysisResult {
+    pub features: DocumentFeatures,
+    pub quality_score: f64,
+    pub relevance_score: f64,
+    pub topics: Vec<String>,
+    pub language: Option<String>,
+    pub recommendations: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ContentQuality {
+    Excellent = 5,
+    Good = 4,
+    Average = 3,
+    Poor = 2,
+    VeryPoor = 1,
+}
+
+impl ContentQuality {
+    pub fn from_score(score: f64) -> Self {
+        match score {
+            s if s >= 4.5 => ContentQuality::Excellent,
+            s if s >= 3.5 => ContentQuality::Good,
+            s if s >= 2.5 => ContentQuality::Average,
+            s if s >= 1.5 => ContentQuality::Poor,
+            _ => ContentQuality::VeryPoor,
+        }
+    }
+    
+    pub fn to_numeric(&self) -> f64 {
+        match self {
+            ContentQuality::Excellent => 5.0,
+            ContentQuality::Good => 4.0,
+            ContentQuality::Average => 3.0,
+            ContentQuality::Poor => 2.0,
+            ContentQuality::VeryPoor => 1.0,
+        }
+    }
+}
+
+pub struct MLContentAnalyzer {
+    // 使用简单的统计模型而不是复杂的ML库
+    quality_weights: HashMap<String, f64>,
+    relevance_keywords: HashMap<String, f64>,
+}
+
+impl MLContentAnalyzer {
+    pub fn new() -> Self {
+        let mut quality_weights = HashMap::new();
+        quality_weights.insert("word_count".to_string(), 0.15);
+        quality_weights.insert("sentence_count".to_string(), 0.10);
+        quality_weights.insert("avg_word_length".to_string(), 0.10);
+        quality_weights.insert("code_block_count".to_string(), 0.20);
+        quality_weights.insert("link_count".to_string(), 0.15);
+        quality_weights.insert("heading_count".to_string(), 0.15);
+        quality_weights.insert("complexity_score".to_string(), 0.15);
+
+        let mut relevance_keywords = HashMap::new();
+        relevance_keywords.insert("rust".to_string(), 1.0);
+        relevance_keywords.insert("programming".to_string(), 0.9);
+        relevance_keywords.insert("code".to_string(), 0.8);
+        relevance_keywords.insert("development".to_string(), 0.8);
+        relevance_keywords.insert("software".to_string(), 0.7);
+        relevance_keywords.insert("algorithm".to_string(), 0.9);
+        relevance_keywords.insert("data".to_string(), 0.6);
+        relevance_keywords.insert("function".to_string(), 0.7);
+        relevance_keywords.insert("variable".to_string(), 0.6);
+        relevance_keywords.insert("struct".to_string(), 0.8);
+
+        Self {
+            quality_weights,
+            relevance_keywords,
+        }
+    }
+
+    pub async fn analyze_content(&self, content: &str, context: Option<&str>) -> Result<ContentAnalysisResult> {
+        let features = self.extract_features(content).await?;
+        let quality_score = self.calculate_quality_score(&features);
+        let relevance_score = self.calculate_relevance_score(content, context);
+        let topics = self.extract_topics(content);
+        let language = self.detect_language(content);
+        let recommendations = self.generate_recommendations(&features, quality_score);
+
+        Ok(ContentAnalysisResult {
+            features,
+            quality_score,
+            relevance_score,
+            topics,
+            language,
+            recommendations,
+        })
+    }
+
+    async fn extract_features(&self, content: &str) -> Result<DocumentFeatures> {
+        let words: Vec<&str> = content.unicode_words().collect();
+        let sentences: Vec<&str> = content.split(&['.', '!', '?'][..]).collect();
+        let paragraphs: Vec<&str> = content.split("\n\n").collect();
+
+        let word_count = words.len();
+        let sentence_count = sentences.len();
+        let paragraph_count = paragraphs.len();
+
+        let avg_word_length = if word_count > 0 {
+            words.iter().map(|w| w.len()).sum::<usize>() as f64 / word_count as f64
+        } else {
+            0.0
+        };
+
+        let avg_sentence_length = if sentence_count > 0 {
+            word_count as f64 / sentence_count as f64
+        } else {
+            0.0
+        };
+
+        let code_block_count = content.matches("```").count() / 2;
+        let link_count = content.matches("http").count() + content.matches("[").count();
+        let heading_count = content.matches('#').count();
+
+        let complexity_score = self.calculate_complexity(content);
+        let readability_score = self.calculate_readability_score(content);
+
+        Ok(DocumentFeatures {
+            word_count,
+            sentence_count,
+            paragraph_count,
+            avg_word_length,
+            avg_sentence_length,
+            code_block_count,
+            link_count,
+            heading_count,
+            complexity_score,
+            readability_score: readability_score.into(),
+        })
+    }
+
+    fn calculate_quality_score(&self, features: &DocumentFeatures) -> f64 {
+        let mut score = 0.0;
+
+        // 基于特征计算质量分数
+        score += (features.word_count.min(1000) as f64 / 1000.0) * self.quality_weights["word_count"];
+        score += (features.sentence_count.min(50) as f64 / 50.0) * self.quality_weights["sentence_count"];
+        score += (features.avg_word_length.min(10.0) / 10.0) * self.quality_weights["avg_word_length"];
+        score += (features.code_block_count.min(10) as f64 / 10.0) * self.quality_weights["code_block_count"];
+        score += (features.link_count.min(20) as f64 / 20.0) * self.quality_weights["link_count"];
+        score += (features.heading_count.min(10) as f64 / 10.0) * self.quality_weights["heading_count"];
+        score += (features.complexity_score / 100.0) * self.quality_weights["complexity_score"];
+
+        (score * 5.0).min(5.0).max(1.0)
+    }
+
+    fn calculate_relevance_score(&self, content: &str, context: Option<&str>) -> f64 {
+        let content_lower = content.to_lowercase();
+        let mut relevance = 0.0;
+        let mut total_weight = 0.0;
+
+        for (keyword, weight) in &self.relevance_keywords {
+            let count = content_lower.matches(keyword).count() as f64;
+            relevance += count * weight;
+            total_weight += weight;
+        }
+
+        if let Some(ctx) = context {
+            let ctx_lower = ctx.to_lowercase();
+            for (keyword, weight) in &self.relevance_keywords {
+                if ctx_lower.contains(keyword) {
+                    relevance += weight * 0.5; // 上下文匹配权重较低
+                }
+            }
+        }
+
+        (relevance / total_weight).min(1.0)
+    }
+
+    fn extract_topics(&self, content: &str) -> Vec<String> {
+        let mut topics = Vec::new();
+        let content_lower = content.to_lowercase();
+
+        // 简单的主题提取基于关键词
+        let topic_keywords = vec![
+            ("rust", "Rust编程"),
+            ("javascript", "JavaScript"),
+            ("python", "Python"),
+            ("web", "Web开发"),
+            ("api", "API设计"),
+            ("database", "数据库"),
+            ("algorithm", "算法"),
+            ("machine learning", "机器学习"),
+            ("security", "安全"),
+            ("performance", "性能优化"),
+        ];
+
+        for (keyword, topic) in topic_keywords {
+            if content_lower.contains(keyword) {
+                topics.push(topic.to_string());
+            }
+        }
+
+        topics.truncate(5); // 最多返回5个主题
+        topics
+    }
+
+    fn detect_language(&self, content: &str) -> Option<String> {
+        // 简单的语言检测基于关键词
+        let content_lower = content.to_lowercase();
+        
+        if content_lower.contains("fn ") || content_lower.contains("struct ") || content_lower.contains("impl ") {
+            Some("Rust".to_string())
+        } else if content_lower.contains("function ") || content_lower.contains("const ") || content_lower.contains("let ") {
+            Some("JavaScript".to_string())
+        } else if content_lower.contains("def ") || content_lower.contains("class ") || content_lower.contains("import ") {
+            Some("Python".to_string())
+        } else {
+            Some("Text".to_string())
+        }
+    }
+
+    fn generate_recommendations(&self, features: &DocumentFeatures, quality_score: f64) -> Vec<String> {
+        let mut recommendations = Vec::new();
+
+        if features.word_count < 100 {
+            recommendations.push("内容过短，建议增加更多详细信息".to_string());
+        }
+
+        if features.heading_count == 0 {
+            recommendations.push("建议添加标题来改善文档结构".to_string());
+        }
+
+        if features.code_block_count == 0 && features.word_count > 200 {
+            recommendations.push("考虑添加代码示例来增强说明".to_string());
+        }
+
+        if features.avg_sentence_length > 25.0 {
+            recommendations.push("句子过长，建议分解为更短的句子".to_string());
+        }
+
+        if quality_score < 3.0 {
+            recommendations.push("整体质量需要改进，建议增加更多有价值的内容".to_string());
+        }
+
+        recommendations
+    }
+
+    fn calculate_complexity(&self, content: &str) -> f64 {
+        let mut complexity = 0.0;
+
+        // 基于各种复杂性指标
+        complexity += content.matches("if ").count() as f64 * 2.0;
+        complexity += content.matches("for ").count() as f64 * 3.0;
+        complexity += content.matches("while ").count() as f64 * 3.0;
+        complexity += content.matches("match ").count() as f64 * 4.0;
+        complexity += content.matches("async ").count() as f64 * 2.0;
+        complexity += content.matches("trait ").count() as f64 * 5.0;
+        complexity += content.matches("impl ").count() as f64 * 4.0;
+
+        complexity.min(100.0)
+    }
+
+    /// 计算可读性分数 (基于Flesch公式的改进版本)
+    fn calculate_readability_score(&self, text: &str) -> f32 {
+        let sentences: Vec<&str> = text.split(&['.', '!', '?'][..]).filter(|s| !s.trim().is_empty()).collect();
+        let words: Vec<&str> = text.split_whitespace().collect();
+        
+        if sentences.is_empty() || words.is_empty() {
+            return 0.0;
+        }
+
+        let avg_sentence_length = words.len() as f64 / sentences.len() as f64;
+        let avg_word_length = words.iter().map(|w| w.len()).sum::<usize>() as f64 / words.len() as f64;
+
+        // 基于Flesch公式的改进版本
+        let score = 206.835 - (1.015 * avg_sentence_length) - (84.6 * avg_word_length / 4.7);
+        score.max(0.0).min(100.0) as f32
+    }
+}
+
+impl Default for MLContentAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+} 

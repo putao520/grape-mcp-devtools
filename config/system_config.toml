@@ -1,0 +1,47 @@
+# Grape MCP DevTools 系统配置文件
+# 此文件包含系统的核心配置参数，替代代码中的硬编码值
+
+[vector_search]
+# 向量搜索相关配置
+cache_limit = 1000
+similarity_threshold = 0.85
+search_timeout_ms = 1000
+max_results_per_query = 100
+embedding_cache_ttl_hours = 24
+
+[api_limits]
+# API调用限制
+github_per_page = 100
+batch_processing_size = 50
+concurrent_requests = 10
+retry_attempts = 3
+backoff_multiplier = 2
+
+[content_analysis]
+# 内容分析配置
+min_content_length = 100
+max_document_length = 10000
+chunk_size = 1000
+chunk_overlap = 100
+quality_weights = { word_count = 0.15, sentence_count = 0.10, avg_word_length = 0.10, code_block_count = 0.20, link_count = 0.15, heading_count = 0.15, complexity_score = 0.15 }
+
+[similarity_detection]
+# 相似度检测权重
+text_similarity_weight = 0.4
+structure_similarity_weight = 0.25
+keyword_similarity_weight = 0.25
+complexity_similarity_weight = 0.1
+
+[performance]
+# 性能相关配置
+cache_cleanup_interval_hours = 12
+vector_dimension = 1536
+index_rebuild_threshold = 10000
+memory_limit_mb = 512
+
+[ai_integration]
+# AI集成配置
+default_model = "nvidia/nv-embedqa-mistral-7b-v2"
+fallback_to_statistical = true
+enable_real_ai_analysis = true
+api_timeout_seconds = 30 

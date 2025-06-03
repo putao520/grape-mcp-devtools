@@ -37,13 +37,6 @@ pub struct PyPIChecker {
 }
 
 impl PyPIChecker {
-    pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            base_url: "https://pypi.org/pypi".to_string(),
-        }
-    }
-
     /// 解析PyPI的发布时间
     fn parse_release_date(&self, upload_time: &str) -> chrono::DateTime<Utc> {
         // PyPI的时间格式: "2023-10-20T14:30:15"

@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../grape-vector-db"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "grape-vector-db"
+	}
+}

@@ -5,7 +5,6 @@ use regex::Regex;
 
 use crate::tools::base::{
     MCPTool, FileDocumentFragment,
-    FileVectorizer, 
     Schema, SchemaObject, SchemaString, SchemaBoolean,
 };
 
@@ -15,17 +14,17 @@ use crate::tools::doc_processor::DocumentProcessor;
 pub struct FileGoDocsTool {
     /// 文档处理器
     doc_processor: Arc<DocumentProcessor>,
+    client: reqwest::Client,
 }
 
 impl FileGoDocsTool {
     /// 创建新的Go文档工具
-    pub async fn new(
-        _vectorizer: Arc<dyn FileVectorizer>,
-    ) -> Result<Self> {
-        let doc_processor = Arc::new(DocumentProcessor::new().await?);
+    pub fn new() -> Result<Self> {
+        let doc_processor = Arc::new(DocumentProcessor::new());
         
         Ok(Self {
             doc_processor,
+            client: reqwest::Client::new(),
         })
     }
 

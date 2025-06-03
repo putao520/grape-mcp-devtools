@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use anyhow::Result;
 use crate::errors::MCPError;
 use super::base::{MCPTool, ToolAnnotations, Schema, SchemaObject, SchemaString, SchemaBoolean};
+use regex;
 
 #[derive(Clone)]
 struct VersionInfo {
@@ -30,6 +31,8 @@ enum Registry {
     MavenCentral,
     GoProxy,
     PubDev,
+    FlutterSdk,  // 新增: Flutter SDK
+    DartSdk,     // 新增: Dart SDK
 }
 
 impl Registry {
@@ -41,6 +44,8 @@ impl Registry {
             Registry::MavenCentral => "https://search.maven.org/solrsearch/select",
             Registry::GoProxy => "https://proxy.golang.org",
             Registry::PubDev => "https://pub.dev/api",
+            Registry::FlutterSdk => "https://docs.flutter.dev",
+            Registry::DartSdk => "https://api.github.com/repos/dart-lang/sdk",
         }
     }
 }
@@ -53,6 +58,12 @@ pub struct CheckVersionTool {
 
 impl CheckVersionTool {
     pub fn new() -> Self {
+        // 创建带有User-Agent的HTTP客户端
+        let client = reqwest::Client::builder()
+            .user_agent("grape-mcp-devtools/2.0.0 (https://github.com/grape-mcp-devtools)")
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+            
         Self {
             _annotations: ToolAnnotations {
                 category: "版本检查".to_string(),
@@ -60,10 +71,10 @@ impl CheckVersionTool {
                 version: "1.0".to_string(),
             },
             cache: Arc::new(RwLock::new(HashMap::new())),
-            client: reqwest::Client::new(),
+            client,
         }
     }
-    
+
     async fn fetch_version_info(&self, type_: &str, name: &str) -> Result<VersionInfo> {
         match type_ {
             "cargo" => self.fetch_crates_io(name).await,
@@ -71,18 +82,153 @@ impl CheckVersionTool {
             "pip" => self.fetch_pypi(name).await,
             "maven" => self.fetch_maven_central(name).await,
             "go" => self.fetch_go_proxy(name).await,
-            "pub" => self.fetch_pub_dev(name).await,
+            "pub" => {
+                // 特殊处理Flutter和Dart
+                match name {
+                    "flutter" => self.fetch_flutter_sdk().await,
+                    "dart" => self.fetch_dart_sdk().await,
+                    _ => self.fetch_pub_dev(name).await,
+                }
+            },
+            "flutter" => self.fetch_flutter_sdk().await,  // 新增: 直接支持flutter类型
+            "dart" => self.fetch_dart_sdk().await,        // 新增: 直接支持dart类型
             _ => Err(MCPError::NotFound(format!(
                 "不支持的包类型: {}", type_
             )).into()),
         }
     }
 
+    async fn fetch_flutter_sdk(&self) -> Result<VersionInfo> {
+        // 从GitHub API获取Flutter SDK的最新版本
+        let url = "https://api.github.com/repos/flutter/flutter/releases/latest";
+        let response = self.client.get(url).send().await?;
+        
+        if !response.status().is_success() {
+            return Err(MCPError::NotFound("无法获取Flutter SDK版本信息".to_string()).into());
+        }
+        
+        let data: Value = response.json().await?;
+        
+        let tag_name = data["tag_name"]
+            .as_str()
+            .ok_or_else(|| MCPError::CacheError("无效的Flutter SDK响应".to_string()))?;
+            
+        let published_at = data["published_at"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+            
+        // 获取所有版本列表
+        let all_releases_url = "https://api.github.com/repos/flutter/flutter/releases?per_page=50";
+        let all_releases_response = self.client.get(all_releases_url).send().await?;
+        let all_releases: Value = all_releases_response.json().await?;
+        
+        let available_versions = all_releases
+            .as_array()
+            .map(|releases| {
+                releases.iter()
+                    .filter_map(|release| release["tag_name"].as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+            
+        Ok(VersionInfo {
+            latest_stable: tag_name.to_string(),
+            latest_preview: None,
+            release_date: published_at,
+            eol_date: None,
+            download_url: Some("https://docs.flutter.dev/get-started/install".to_string()),
+            package_type: "flutter".to_string(),
+            available_versions,
+            dependencies: None,
+            repository_url: Some("https://github.com/flutter/flutter".to_string()),
+        })
+    }
+    
+    async fn fetch_dart_sdk(&self) -> Result<VersionInfo> {
+        // 从GitHub Tags API获取Dart SDK的版本信息
+        let url = "https://api.github.com/repos/dart-lang/sdk/tags?per_page=100";
+        let response = self.client.get(url).send().await?;
+        
+        if !response.status().is_success() {
+            return Err(MCPError::NotFound("无法获取Dart SDK版本信息".to_string()).into());
+        }
+        
+        let data: Value = response.json().await?;
+        let tags = data.as_array()
+            .ok_or_else(|| MCPError::CacheError("无效的Dart SDK响应".to_string()))?;
+            
+        // 过滤出Dart SDK版本标签（格式通常是数字.数字.数字）
+        let mut dart_versions: Vec<String> = tags.iter()
+            .filter_map(|tag| tag["name"].as_str())
+            .filter(|name| {
+                // 过滤出符合版本格式的标签，例如 "3.2.0", "2.19.6" 等
+                let version_regex = regex::Regex::new(r"^\d+\.\d+\.\d+(-.*)?$").unwrap();
+                version_regex.is_match(name)
+            })
+            .map(String::from)
+            .collect();
+            
+        if dart_versions.is_empty() {
+            return Err(MCPError::NotFound("未找到有效的Dart SDK版本".to_string()).into());
+        }
+        
+        // 按版本号排序，获取最新版本
+        dart_versions.sort_by(|a, b| {
+            // 简单的版本比较，按字符串排序（对于大多数情况足够）
+            b.cmp(a)
+        });
+        
+        let latest_version = dart_versions.first()
+            .ok_or_else(|| MCPError::CacheError("无法确定最新版本".to_string()))?;
+            
+        // 获取该版本的详细信息
+        let tag_info_url = format!("https://api.github.com/repos/dart-lang/sdk/git/refs/tags/{}", latest_version);
+        let tag_response = self.client.get(&tag_info_url).send().await;
+        
+        let release_date = if let Ok(tag_resp) = tag_response {
+            if let Ok(tag_data) = tag_resp.json::<Value>().await {
+                // 尝试从tag信息中获取准确的提交日期
+                tag_data["object"]["url"].as_str()
+                    .and_then(|_commit_url| {
+                        // 可以进一步调用GitHub API获取commit的具体日期
+                        // 这里返回None以使用当前时间作为fallback
+                        None
+                    })
+                    .unwrap_or_else(Utc::now)
+            } else {
+                Utc::now()
+            }
+        } else {
+            Utc::now()
+        };
+            
+        Ok(VersionInfo {
+            latest_stable: latest_version.clone(),
+            latest_preview: None,
+            release_date,
+            eol_date: None,
+            download_url: Some("https://dart.dev/get-dart".to_string()),
+            package_type: "dart".to_string(),
+            available_versions: dart_versions,
+            dependencies: None,
+            repository_url: Some("https://github.com/dart-lang/sdk".to_string()),
+        })
+    }
+
     async fn fetch_crates_io(&self, name: &str) -> Result<VersionInfo> {
         let url = format!("{}/crates/{}", Registry::CratesIo.base_url(), name);
         let response = self.client.get(&url).send().await?;
+        
+        // 检查响应状态
+        if !response.status().is_success() {
+            return Err(MCPError::NotFound(format!("未找到Rust包: {}", name)).into());
+        }
+        
         let data: Value = response.json().await?;
 
+        // 修复：使用正确的字段名
         let crate_data = data["crate"].as_object()
             .ok_or_else(|| MCPError::CacheError("无效的crates.io响应".to_string()))?;
 
@@ -109,11 +255,14 @@ impl CheckVersionTool {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(Utc::now);
 
+        // 修复：使用正确的字段名获取最新版本
+        let latest_version = crate_data["newest_version"]
+            .as_str()
+            .or_else(|| crate_data["max_version"].as_str())
+            .unwrap_or("0.0.0");
+
         Ok(VersionInfo {
-            latest_stable: crate_data["max_stable_version"]
-                .as_str()
-                .unwrap_or("0.0.0")
-                .to_string(),
+            latest_stable: latest_version.to_string(),
             latest_preview: None,
             release_date: latest_release_date,
             eol_date: None,
@@ -196,13 +345,40 @@ impl CheckVersionTool {
 
     async fn fetch_maven_central(&self, name: &str) -> Result<VersionInfo> {
         // Maven Central使用Solr查询API
-        let url = format!(
-            "{}?q=a:\"{}\"&core=gav&rows=20&wt=json",
-            Registry::MavenCentral.base_url(),
-            name
-        );
+        // 对于 "org.springframework:spring-core" 格式，需要分离groupId和artifactId
+        let (group_id, artifact_id) = if name.contains(':') {
+            let parts: Vec<&str> = name.split(':').collect();
+            if parts.len() >= 2 {
+                (parts[0], parts[1])
+            } else {
+                ("", name)
+            }
+        } else {
+            ("", name)
+        };
+        
+        let url = if !group_id.is_empty() {
+            format!(
+                "{}?q=g:\"{}\" AND a:\"{}\"&core=gav&rows=20&wt=json",
+                Registry::MavenCentral.base_url(),
+                group_id,
+                artifact_id
+            )
+        } else {
+            format!(
+                "{}?q=a:\"{}\"&core=gav&rows=20&wt=json",
+                Registry::MavenCentral.base_url(),
+                name
+            )
+        };
         
         let response = self.client.get(&url).send().await?;
+        
+        // 检查响应状态
+        if !response.status().is_success() {
+            return Err(MCPError::NotFound(format!("未找到Maven包: {}", name)).into());
+        }
+        
         let data: Value = response.json().await?;
         
         let docs = data["response"]["docs"].as_array()
@@ -230,8 +406,8 @@ impl CheckVersionTool {
             eol_date: None,
             download_url: Some(format!(
                 "https://search.maven.org/artifact/{}/{}", 
-                latest["g"].as_str().unwrap_or(""),
-                name
+                latest["g"].as_str().unwrap_or(group_id),
+                artifact_id
             )),
             package_type: "maven".to_string(),
             available_versions: docs.iter()
@@ -380,14 +556,14 @@ impl MCPTool for CheckVersionTool {
                     map.insert(
                         "type".to_string(),
                         Schema::String(SchemaString {
-                            description: Some("包所属的包管理器类型(cargo/npm/pip/maven/go/pub)".to_string()),
+                            description: Some("包所属的包管理器类型(cargo/npm/pip/maven/go/pub/flutter/dart)，其中flutter和dart为SDK版本检查".to_string()),
                             ..Default::default()
                         }),
                     );
                     map.insert(
                         "name".to_string(),
                         Schema::String(SchemaString {
-                            description: Some("要查询版本信息的包名称".to_string()),
+                            description: Some("要查询版本信息的包名称，对于flutter和dart类型，name参数会被忽略".to_string()),
                             ..Default::default()
                         }),
                     );

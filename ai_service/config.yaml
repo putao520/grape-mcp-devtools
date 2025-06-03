@@ -1,0 +1,217 @@
+# 企业级AI内容分析服务配置文件
+
+# 服务配置
+service:
+  name: "grape-ai-content-analyzer"
+  version: "2.0.0"
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+  reload: false
+
+# 内容抽取配置
+content_extraction:
+  # 主要抽取引擎配置
+  engines:
+    trafilatura:
+      enabled: true
+      priority: 1
+      config:
+        include_comments: false
+        include_tables: true
+        include_links: true
+        favor_precision: true
+        
+    newspaper3k:
+      enabled: true
+      priority: 2
+      config:
+        keep_article_html: true
+        fetch_images: false
+        request_timeout: 30
+        
+    readability:
+      enabled: true
+      priority: 3
+      config:
+        min_text_length: 100
+        retry_length: 250
+        
+  # 内容清理配置
+  cleaning:
+    remove_empty_paragraphs: true
+    normalize_whitespace: true
+    fix_encoding: true
+    remove_duplicate_content: true
+    min_content_length: 50
+
+# AI模型配置
+ai_models:
+  # 语义嵌入模型
+  embedding:
+    model_name: "sentence-transformers/all-MiniLM-L6-v2"
+    cache_dir: "./models/embeddings"
+    device: "cpu"  # 可设置为 "cuda" 如果有GPU
+    
+  # 文档分类模型
+  classification:
+    model_name: "microsoft/DialoGPT-medium"
+    cache_dir: "./models/classification"
+    confidence_threshold: 0.7
+    
+  # 文本摘要模型
+  summarization:
+    model_name: "facebook/bart-large-cnn"
+    cache_dir: "./models/summarization"
+    max_length: 512
+    min_length: 50
+    
+  # 实体识别模型
+  ner:
+    model_name: "en_core_web_sm"
+    confidence_threshold: 0.8
+
+# 向量数据库配置
+vector_database:
+  # Qdrant配置
+  qdrant:
+    enabled: true
+    host: "localhost"
+    port: 6333
+    collection_name: "document_embeddings"
+    vector_size: 384
+    distance: "Cosine"
+    
+  # ChromaDB配置 (备选)
+  chromadb:
+    enabled: false
+    persist_directory: "./data/chromadb"
+    collection_name: "documents"
+
+# 浏览器自动化配置
+browser_automation:
+  playwright:
+    enabled: true
+    headless: true
+    timeout: 30000
+    viewport_width: 1920
+    viewport_height: 1080
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    
+  selenium:
+    enabled: false
+    driver: "chrome"
+    implicit_wait: 10
+    page_load_timeout: 30
+
+# 缓存配置
+cache:
+  redis:
+    enabled: true
+    host: "localhost"
+    port: 6379
+    db: 0
+    ttl: 3600  # 1小时
+    
+  memory:
+    enabled: true
+    max_size: 1000
+    ttl: 1800  # 30分钟
+
+# 语言检测配置
+language_detection:
+  default_language: "en"
+  confidence_threshold: 0.7
+  supported_languages:
+    - "en"
+    - "zh"
+    - "es"
+    - "fr"
+    - "de"
+    - "ja"
+    - "ko"
+
+# 文档质量评估配置
+quality_assessment:
+  # 内容质量指标权重
+  weights:
+    content_length: 0.2
+    reading_level: 0.15
+    structure_quality: 0.25
+    code_examples: 0.2
+    link_quality: 0.1
+    language_quality: 0.1
+    
+  # 阈值设定
+  thresholds:
+    min_content_length: 100
+    max_reading_level: 15
+    min_structure_score: 0.5
+    min_overall_quality: 0.6
+
+# 并发和性能配置
+performance:
+  max_concurrent_requests: 50
+  max_extraction_workers: 10
+  request_timeout: 60
+  max_retries: 3
+  backoff_factor: 2.0
+  
+# 日志配置
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
+  file: "./logs/ai_service.log"
+  rotation: "100 MB"
+  retention: "30 days"
+
+# 监控配置
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    metrics_path: "/metrics"
+    
+  health_check:
+    enabled: true
+    path: "/health"
+    interval: 30
+
+# 安全配置
+security:
+  api_key_required: false
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 100
+    burst_size: 10
+    
+  cors:
+    enabled: true
+    origins: ["*"]
+    methods: ["GET", "POST"]
+    headers: ["*"]
+
+# 数据存储配置
+storage:
+  # 文档存储目录
+  documents_dir: "./data/documents"
+  models_dir: "./models"
+  cache_dir: "./cache"
+  logs_dir: "./logs"
+  
+  # 清理策略
+  cleanup:
+    enabled: true
+    max_age_days: 30
+    cleanup_interval_hours: 24
+
+# 测试配置
+testing:
+  test_urls:
+    - "https://docs.python.org/3/"
+    - "https://docs.rust-lang.org/"
+    - "https://nodejs.org/en/docs/"
+    - "https://spring.io/guides"
+    
+  mock_responses: false  # 始终使用真实环境
+  test_timeout: 120 

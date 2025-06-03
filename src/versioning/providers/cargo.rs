@@ -14,12 +14,6 @@ pub struct CratesIoChecker {
 }
 
 impl CratesIoChecker {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-        }
-    }
-
     async fn fetch_crate_data(&self, name: &str) -> Result<Value> {
         let url = format!("{}/crates/{}", Registry::Cargo.base_url(), name);
         let response = self.client.get(&url).send().await?;

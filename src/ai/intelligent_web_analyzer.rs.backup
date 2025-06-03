@@ -1,0 +1,832 @@
+use anyhow::Result;
+use serde_json::{json, Value};
+use tracing::{info, debug, warn};
+use std::collections::{HashMap, HashSet};
+use url::Url;
+use chrono::{DateTime, Utc};
+use regex;
+
+use super::ai_service::{AIService, AIRequest};
+
+/// 任务导向的智能网页分析器
+/// 专门为特定目标（如某个库的文档、API参考等）进行智能分析
+pub struct IntelligentWebAnalyzer {
+    ai_service: AIService,
+    analysis_cache: std::sync::Arc<tokio::sync::RwLock<HashMap<String, CachedAnalysis>>>,
+}
+
+/// 爬虫任务定义
+#[derive(Debug, Clone)]
+pub struct CrawlTask {
+    /// 任务ID
+    pub task_id: String,
+    /// 目标描述（例如："寻找tokio库的异步编程教程和API文档"）
+    pub target_description: String,
+    /// 起始URL
+    pub start_url: String,
+    /// 目标库/技术名称
+    pub library_name: String,
+    /// 编程语言
+    pub programming_language: String,
+    /// 期望的内容类型
+    pub expected_content_types: Vec<ContentType>,
+    /// 最大深度
+    pub max_depth: u32,
+    /// 最大页面数
+    pub max_pages: u32,
+    /// 任务创建时间
+    pub created_at: DateTime<Utc>,
+}
+
+/// 内容类型
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContentType {
+    Documentation,
+    Tutorial,
+    ApiReference,
+    Examples,
+    GettingStarted,
+    Installation,
+    Configuration,
+    Troubleshooting,
+    Changelog,
+    Community,
+}
+
+/// 网页相关性分析结果
+#[derive(Debug, Clone)]
+pub struct PageRelevanceAnalysis {
+    /// 相关性分数 (0.0-1.0)
+    pub relevance_score: f32,
+    /// 是否与任务目标相关
+    pub is_relevant: bool,
+    /// 相关性原因
+    pub relevance_reasons: Vec<String>,
+    /// 检测到的内容类型
+    pub detected_content_types: Vec<ContentType>,
+    /// 重要性级别 (1-5)
+    pub importance_level: u8,
+    /// 推荐的下一步行动
+    pub recommended_actions: Vec<RecommendedAction>,
+}
+
+/// 推荐行动
+#[derive(Debug, Clone)]
+pub enum RecommendedAction {
+    ExtractContent,
+    FollowLinks,
+    SkipPage,
+    PrioritizeHighly,
+    AnalyzeDeeper,
+}
+
+/// 内容区域识别结果
+#[derive(Debug, Clone)]
+pub struct ContentRegionAnalysis {
+    /// 主要内容区域
+    pub main_content_regions: Vec<ContentRegion>,
+    /// 导航区域
+    pub navigation_regions: Vec<ContentRegion>,
+    /// 侧边栏区域
+    pub sidebar_regions: Vec<ContentRegion>,
+    /// 相关链接区域
+    pub related_links_regions: Vec<ContentRegion>,
+    /// 代码示例区域
+    pub code_regions: Vec<ContentRegion>,
+}
+
+/// 内容区域
+#[derive(Debug, Clone)]
+pub struct ContentRegion {
+    /// 区域类型
+    pub region_type: RegionType,
+    /// 区域内容
+    pub content: String,
+    /// 相关性分数
+    pub relevance_score: f32,
+    /// HTML选择器路径
+    pub selector_path: Option<String>,
+    /// 提取的链接
+    pub extracted_links: Vec<ExtractedLink>,
+}
+
+/// 区域类型
+#[derive(Debug, Clone)]
+pub enum RegionType {
+    MainContent,
+    Navigation,
+    Sidebar,
+    CodeExample,
+    ApiDocumentation,
+    Tutorial,
+    RelatedLinks,
+    TableOfContents,
+}
+
+/// 提取的链接
+#[derive(Debug, Clone)]
+pub struct ExtractedLink {
+    /// 链接URL
+    pub url: String,
+    /// 链接文本
+    pub text: String,
+    /// 链接类型
+    pub link_type: LinkType,
+    /// 相关性分数
+    pub relevance_score: f32,
+    /// 优先级 (1-5)
+    pub priority: u8,
+}
+
+/// 链接类型
+#[derive(Debug, Clone)]
+pub enum LinkType {
+    Documentation,
+    Tutorial,
+    ApiReference,
+    Example,
+    Download,
+    ExternalReference,
+    Navigation,
+    Related,
+}
+
+/// 缓存的分析结果
+#[derive(Debug, Clone)]
+struct CachedAnalysis {
+    relevance_analysis: PageRelevanceAnalysis,
+    content_regions: ContentRegionAnalysis,
+    timestamp: DateTime<Utc>,
+}
+
+impl IntelligentWebAnalyzer {
+    /// 创建新的智能网页分析器
+    pub async fn new(ai_service: AIService) -> Result<Self> {
+        Ok(Self {
+            ai_service,
+            analysis_cache: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// 分析网页与任务的相关性
+    pub async fn analyze_page_relevance(&self, html_content: &str, url: &str, task: &CrawlTask) -> Result<PageRelevanceAnalysis> {
+        info!("🔍 分析网页相关性: {} (任务: {})", url, task.target_description);
+
+        // 检查缓存
+        let cache_key = format!("relevance:{}:{}", url, task.task_id);
+        if let Some(cached) = self.get_cached_relevance(&cache_key).await {
+            debug!("🎯 使用缓存的相关性分析结果");
+            return Ok(cached);
+        }
+
+        // 构建AI分析请求
+        let system_prompt = self.get_relevance_analysis_system_prompt();
+        let user_message = self.get_relevance_analysis_user_prompt(html_content, url, task);
+
+        let ai_request = AIRequest {
+            model: None,
+            system_prompt: Some(system_prompt),
+            user_message,
+            temperature: Some(0.2),
+            max_tokens: Some(3000),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        let analysis = self.parse_relevance_analysis_response(&ai_response.content, task).await?;
+
+        // 缓存结果
+        self.cache_relevance_analysis(&cache_key, &analysis).await;
+
+        Ok(analysis)
+    }
+
+    /// 识别和分析内容区域
+    pub async fn analyze_content_regions(&self, html_content: &str, url: &str, task: &CrawlTask) -> Result<ContentRegionAnalysis> {
+        info!("📋 分析内容区域: {} (任务: {})", url, task.target_description);
+
+        // 构建AI分析请求
+        let system_prompt = self.get_content_region_system_prompt();
+        let user_message = self.get_content_region_user_prompt(html_content, url, task);
+
+        let ai_request = AIRequest {
+            model: None,
+            system_prompt: Some(system_prompt),
+            user_message,
+            temperature: Some(0.3),
+            max_tokens: Some(4000),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        let regions = self.parse_content_region_response(&ai_response.content, task).await?;
+
+        Ok(regions)
+    }
+
+    /// 提取和评估相关链接
+    pub async fn extract_relevant_links(&self, html_content: &str, current_url: &str, task: &CrawlTask) -> Result<Vec<ExtractedLink>> {
+        info!("🔗 提取相关链接: {} (任务: {})", current_url, task.target_description);
+
+        let system_prompt = self.get_link_extraction_system_prompt();
+        let user_message = self.get_link_extraction_user_prompt(html_content, current_url, task);
+
+        let ai_request = AIRequest {
+            model: None,
+            system_prompt: Some(system_prompt),
+            user_message,
+            temperature: Some(0.3),
+            max_tokens: Some(3000),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        let links = self.parse_link_extraction_response(&ai_response.content, current_url, task).await?;
+
+        Ok(links)
+    }
+
+    /// 综合分析页面（相关性 + 内容区域 + 链接提取）
+    pub async fn comprehensive_page_analysis(&self, html_content: &str, url: &str, task: &CrawlTask) -> Result<(PageRelevanceAnalysis, ContentRegionAnalysis, Vec<ExtractedLink>)> {
+        info!("🎯 开始综合页面分析: {}", url);
+
+        // 并行执行三个分析任务
+        let (relevance_result, regions_result, links_result) = tokio::try_join!(
+            self.analyze_page_relevance(html_content, url, task),
+            self.analyze_content_regions(html_content, url, task),
+            self.extract_relevant_links(html_content, url, task)
+        )?;
+
+        info!("✅ 综合页面分析完成，相关性分数: {:.2}", relevance_result.relevance_score);
+
+        Ok((relevance_result, regions_result, links_result))
+    }
+
+    /// 生成任务目标的内容摘要
+    pub async fn generate_task_focused_summary(&self, content_regions: &ContentRegionAnalysis, task: &CrawlTask) -> Result<String> {
+        info!("📝 生成任务导向的内容摘要");
+
+        // 选择最相关的内容区域
+        let relevant_content: String = content_regions.main_content_regions
+            .iter()
+            .filter(|region| region.relevance_score > 0.7)
+            .map(|region| region.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let system_prompt = self.get_task_summary_system_prompt();
+        let user_message = self.get_task_summary_user_prompt(&relevant_content, task);
+
+        let ai_request = AIRequest {
+            model: None,
+            system_prompt: Some(system_prompt),
+            user_message,
+            temperature: Some(0.3),
+            max_tokens: Some(2000),
+            stream: false,
+        };
+
+        let ai_response = self.ai_service.request(ai_request).await?;
+        Ok(ai_response.content)
+    }
+
+    /// 获取相关性分析系统提示词
+    fn get_relevance_analysis_system_prompt(&self) -> String {
+        r#"你是一个专业的网页内容相关性分析专家。你的任务是分析给定网页是否与特定的爬虫任务目标相关。
+
+分析维度：
+1. 内容相关性 - 页面内容是否与目标库/技术相关
+2. 内容类型 - 识别页面的内容类型（文档、教程、API等）
+3. 质量评估 - 评估内容的质量和完整性
+4. 重要性评级 - 判断页面在整个任务中的重要程度
+5. 行动建议 - 推荐下一步应该采取的行动
+
+请以JSON格式返回分析结果，包含：
+- relevance_score: 相关性分数(0.0-1.0)
+- is_relevant: 是否相关(true/false)
+- relevance_reasons: 相关性原因数组
+- detected_content_types: 检测到的内容类型数组
+- importance_level: 重要性级别(1-5)
+- recommended_actions: 推荐行动数组
+
+保持分析的专业性和准确性。"#.to_string()
+    }
+
+    /// 获取相关性分析用户提示词
+    fn get_relevance_analysis_user_prompt(&self, html_content: &str, url: &str, task: &CrawlTask) -> String {
+        // 限制HTML内容长度以避免超过token限制
+        let truncated_content = if html_content.len() > 6000 {
+            format!("{}...", &html_content[..6000])
+        } else {
+            html_content.to_string()
+        };
+
+        format!(r#"请分析以下网页是否与爬虫任务相关：
+
+任务描述：{}
+目标库：{}
+编程语言：{}
+期望内容类型：{:?}
+
+当前页面URL：{}
+页面内容：
+{}
+
+请分析此页面与任务目标的相关性，并提供详细的分析结果。"#, 
+            task.target_description,
+            task.library_name,
+            task.programming_language,
+            task.expected_content_types,
+            url,
+            truncated_content
+        )
+    }
+
+    /// 获取内容区域分析系统提示词
+    fn get_content_region_system_prompt(&self) -> String {
+        r#"你是一个专业的网页内容区域识别专家。你需要识别并分析网页中的不同内容区域。
+
+识别的区域类型：
+1. 主要内容区域 - 包含核心信息的区域
+2. 导航区域 - 网站导航和菜单
+3. 侧边栏区域 - 相关链接和辅助信息
+4. 代码示例区域 - 代码块和示例
+5. API文档区域 - API参考和文档
+6. 教程区域 - 教程和指南内容
+7. 相关链接区域 - 相关资源链接
+
+对每个区域请提供：
+- 区域类型
+- 内容摘要
+- 相关性分数
+- 提取的重要链接
+
+请以JSON格式返回结果。"#.to_string()
+    }
+
+    /// 获取内容区域分析用户提示词
+    fn get_content_region_user_prompt(&self, html_content: &str, url: &str, task: &CrawlTask) -> String {
+        let truncated_content = if html_content.len() > 7000 {
+            format!("{}...", &html_content[..7000])
+        } else {
+            html_content.to_string()
+        };
+
+        format!(r#"请识别并分析以下网页的内容区域：
+
+任务目标：{}
+目标库：{}
+
+页面URL：{}
+页面内容：
+{}
+
+请识别所有重要的内容区域，特别关注与{}相关的内容。"#,
+            task.target_description,
+            task.library_name,
+            url,
+            truncated_content,
+            task.library_name
+        )
+    }
+
+    /// 获取链接提取系统提示词
+    fn get_link_extraction_system_prompt(&self) -> String {
+        r#"你是一个专业的相关链接提取专家。你的任务是从网页中提取与特定任务目标相关的链接。
+
+提取原则：
+1. 优先提取与目标库/技术直接相关的链接
+2. 识别不同类型的链接（文档、教程、API、示例等）
+3. 评估每个链接的相关性和优先级
+4. 避免提取无关或低质量的链接
+
+对每个链接请提供：
+- 链接URL（转换为绝对URL）
+- 链接文本
+- 链接类型
+- 相关性分数(0.0-1.0)
+- 优先级(1-5)
+
+请以JSON格式返回链接数组。"#.to_string()
+    }
+
+    /// 获取链接提取用户提示词
+    fn get_link_extraction_user_prompt(&self, html_content: &str, current_url: &str, task: &CrawlTask) -> String {
+        let truncated_content = if html_content.len() > 6000 {
+            format!("{}...", &html_content[..6000])
+        } else {
+            html_content.to_string()
+        };
+
+        format!(r#"请从以下网页中提取与任务相关的链接：
+
+任务描述：{}
+目标库：{}
+当前页面：{}
+
+页面内容：
+{}
+
+请提取所有与{}相关的有价值链接，并评估其相关性和优先级。"#,
+            task.target_description,
+            task.library_name,
+            current_url,
+            truncated_content,
+            task.library_name
+        )
+    }
+
+    /// 获取任务摘要系统提示词
+    fn get_task_summary_system_prompt(&self) -> String {
+        r#"你是一个专业的内容摘要专家。你需要根据特定的爬虫任务目标，生成精准的内容摘要。
+
+摘要要求：
+1. 突出与任务目标最相关的信息
+2. 保持技术准确性
+3. 结构清晰，易于理解
+4. 包含关键的技术细节
+5. 控制长度，突出重点
+
+请生成一个专业的、针对任务目标的内容摘要。"#.to_string()
+    }
+
+    /// 获取任务摘要用户提示词
+    fn get_task_summary_user_prompt(&self, content: &str, task: &CrawlTask) -> String {
+        format!(r#"请为以下内容生成针对任务目标的摘要：
+
+任务目标：{}
+目标库：{}
+编程语言：{}
+
+内容：
+{}
+
+请生成一个专业的摘要，突出与{}相关的关键信息。"#,
+            task.target_description,
+            task.library_name,
+            task.programming_language,
+            content,
+            task.library_name
+        )
+    }
+
+    /// 解析相关性分析响应
+    async fn parse_relevance_analysis_response(&self, response: &str, task: &CrawlTask) -> Result<PageRelevanceAnalysis> {
+        if let Ok(json_value) = serde_json::from_str::<Value>(response) {
+            let relevance_score = json_value.get("relevance_score")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.3) as f32;
+
+            let is_relevant = json_value.get("is_relevant")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let relevance_reasons = json_value.get("relevance_reasons")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+
+            let detected_content_types = json_value.get("detected_content_types")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| self.parse_content_type(v.as_str().unwrap_or(""))).collect())
+                .unwrap_or_default();
+
+            let importance_level = json_value.get("importance_level")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3) as u8;
+
+            let recommended_actions = json_value.get("recommended_actions")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| self.parse_recommended_action(v.as_str().unwrap_or(""))).collect())
+                .unwrap_or_default();
+
+            Ok(PageRelevanceAnalysis {
+                relevance_score,
+                is_relevant,
+                relevance_reasons,
+                detected_content_types,
+                importance_level,
+                recommended_actions,
+            })
+        } else {
+            // 基于文本内容的解析
+            let is_relevant = response.to_lowercase().contains(&task.library_name.to_lowercase());
+            Ok(PageRelevanceAnalysis {
+                relevance_score: if is_relevant { 0.7 } else { 0.3 },
+                is_relevant,
+                relevance_reasons: vec!["基于关键词匹配分析".to_string()],
+                detected_content_types: vec![ContentType::Documentation],
+                importance_level: 3,
+                recommended_actions: vec![if is_relevant { RecommendedAction::ExtractContent } else { RecommendedAction::SkipPage }],
+            })
+        }
+    }
+
+    /// 解析内容区域响应
+    async fn parse_content_region_response(&self, response: &str, task: &CrawlTask) -> Result<ContentRegionAnalysis> {
+        // 完整的内容区域解析实现
+        if let Ok(json_value) = serde_json::from_str::<Value>(response) {
+            let mut main_content_regions = Vec::new();
+            let mut navigation_regions = Vec::new();
+            let mut sidebar_regions = Vec::new();
+            let mut related_links_regions = Vec::new();
+            let mut code_regions = Vec::new();
+
+            // 解析主要内容区域
+            if let Some(main_regions) = json_value.get("main_content_regions").and_then(|v| v.as_array()) {
+                for region_data in main_regions {
+                    if let Some(region) = self.parse_content_region(region_data, RegionType::MainContent) {
+                        main_content_regions.push(region);
+                    }
+                }
+            }
+
+            // 解析导航区域
+            if let Some(nav_regions) = json_value.get("navigation_regions").and_then(|v| v.as_array()) {
+                for region_data in nav_regions {
+                    if let Some(region) = self.parse_content_region(region_data, RegionType::Navigation) {
+                        navigation_regions.push(region);
+                    }
+                }
+            }
+
+            // 解析侧边栏区域
+            if let Some(sidebar_regions_data) = json_value.get("sidebar_regions").and_then(|v| v.as_array()) {
+                for region_data in sidebar_regions_data {
+                    if let Some(region) = self.parse_content_region(region_data, RegionType::Sidebar) {
+                        sidebar_regions.push(region);
+                    }
+                }
+            }
+
+            // 解析相关链接区域
+            if let Some(links_regions) = json_value.get("related_links_regions").and_then(|v| v.as_array()) {
+                for region_data in links_regions {
+                    if let Some(region) = self.parse_content_region(region_data, RegionType::RelatedLinks) {
+                        related_links_regions.push(region);
+                    }
+                }
+            }
+
+            // 解析代码区域
+            if let Some(code_regions_data) = json_value.get("code_regions").and_then(|v| v.as_array()) {
+                for region_data in code_regions_data {
+                    if let Some(region) = self.parse_content_region(region_data, RegionType::CodeExample) {
+                        code_regions.push(region);
+                    }
+                }
+            }
+
+            Ok(ContentRegionAnalysis {
+                main_content_regions,
+                navigation_regions,
+                sidebar_regions,
+                related_links_regions,
+                code_regions,
+            })
+        } else {
+            // 基于文本内容的智能解析
+            self.parse_content_regions_from_text(response, task).await
+        }
+    }
+
+    /// 解析链接提取响应
+    async fn parse_link_extraction_response(&self, response: &str, current_url: &str, task: &CrawlTask) -> Result<Vec<ExtractedLink>> {
+        // 完整的链接提取解析实现
+        if let Ok(json_value) = serde_json::from_str::<Value>(response) {
+            let mut extracted_links = Vec::new();
+
+            if let Some(links_array) = json_value.get("extracted_links").and_then(|v| v.as_array()) {
+                for link_data in links_array {
+                    if let Some(link) = self.parse_extracted_link(link_data, current_url, task) {
+                        extracted_links.push(link);
+                    }
+                }
+            }
+
+            // 按相关性分数排序
+            extracted_links.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+
+            Ok(extracted_links)
+        } else {
+            // 基于文本内容的智能链接提取
+            self.extract_links_from_text(response, current_url, task).await
+        }
+    }
+
+    /// 解析单个内容区域
+    fn parse_content_region(&self, region_data: &Value, default_type: RegionType) -> Option<ContentRegion> {
+        let content = region_data.get("content")?.as_str()?.to_string();
+        let relevance_score = region_data.get("relevance_score")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.5) as f32;
+        let selector_path = region_data.get("selector_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let region_type = region_data.get("region_type")
+            .and_then(|v| v.as_str())
+            .and_then(|s| self.parse_region_type(s))
+            .unwrap_or(default_type);
+
+        let extracted_links = region_data.get("extracted_links")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|link_data| self.parse_extracted_link(link_data, "", &CrawlTask {
+                        task_id: String::new(),
+                        target_description: String::new(),
+                        start_url: String::new(),
+                        library_name: String::new(),
+                        programming_language: String::new(),
+                        expected_content_types: Vec::new(),
+                        max_depth: 0,
+                        max_pages: 0,
+                        created_at: chrono::Utc::now(),
+                    }))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Some(ContentRegion {
+            region_type,
+            content,
+            relevance_score,
+            selector_path,
+            extracted_links,
+        })
+    }
+
+    /// 解析单个提取的链接
+    fn parse_extracted_link(&self, link_data: &Value, current_url: &str, task: &CrawlTask) -> Option<ExtractedLink> {
+        let url = link_data.get("url")?.as_str()?.to_string();
+        let text = link_data.get("text")?.as_str()?.to_string();
+        
+        let link_type = link_data.get("link_type")
+            .and_then(|v| v.as_str())
+            .and_then(|s| self.parse_link_type(s))
+            .unwrap_or(LinkType::Related);
+
+        let relevance_score = link_data.get("relevance_score")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.5) as f32;
+
+        let priority = link_data.get("priority")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3) as u8;
+
+        Some(ExtractedLink {
+            url,
+            text,
+            link_type,
+            relevance_score,
+            priority,
+        })
+    }
+
+    /// 解析区域类型
+    fn parse_region_type(&self, type_str: &str) -> Option<RegionType> {
+        match type_str.to_lowercase().as_str() {
+            "main_content" => Some(RegionType::MainContent),
+            "navigation" => Some(RegionType::Navigation),
+            "sidebar" => Some(RegionType::Sidebar),
+            "code_example" => Some(RegionType::CodeExample),
+            "api_documentation" => Some(RegionType::ApiDocumentation),
+            "tutorial" => Some(RegionType::Tutorial),
+            "related_links" => Some(RegionType::RelatedLinks),
+            "table_of_contents" => Some(RegionType::TableOfContents),
+            _ => None,
+        }
+    }
+
+    /// 解析链接类型
+    fn parse_link_type(&self, type_str: &str) -> Option<LinkType> {
+        match type_str.to_lowercase().as_str() {
+            "documentation" => Some(LinkType::Documentation),
+            "tutorial" => Some(LinkType::Tutorial),
+            "api_reference" => Some(LinkType::ApiReference),
+            "example" => Some(LinkType::Example),
+            "download" => Some(LinkType::Download),
+            "external_reference" => Some(LinkType::ExternalReference),
+            "navigation" => Some(LinkType::Navigation),
+            "related" => Some(LinkType::Related),
+            _ => None,
+        }
+    }
+
+    /// 从文本内容解析内容区域（备用方法）
+    async fn parse_content_regions_from_text(&self, text: &str, task: &CrawlTask) -> Result<ContentRegionAnalysis> {
+        // 基于关键词和模式匹配的智能解析
+        let mut main_content_regions = Vec::new();
+        
+        // 检测主要内容
+        if text.to_lowercase().contains(&task.library_name.to_lowercase()) {
+            main_content_regions.push(ContentRegion {
+                region_type: RegionType::MainContent,
+                content: text.to_string(),
+                relevance_score: 0.8,
+                selector_path: Some("main".to_string()),
+                extracted_links: Vec::new(),
+            });
+        }
+
+        Ok(ContentRegionAnalysis {
+            main_content_regions,
+            navigation_regions: Vec::new(),
+            sidebar_regions: Vec::new(),
+            related_links_regions: Vec::new(),
+            code_regions: Vec::new(),
+        })
+    }
+
+    /// 从文本内容提取链接（备用方法）
+    async fn extract_links_from_text(&self, text: &str, current_url: &str, task: &CrawlTask) -> Result<Vec<ExtractedLink>> {
+        // 基于正则表达式和关键词匹配的链接提取
+        let mut links = Vec::new();
+        
+        // 简单的URL匹配模式
+        let url_pattern = regex::Regex::new(r"https?://[^\s<>\"]+").unwrap();
+        
+        for url_match in url_pattern.find_iter(text) {
+            let url = url_match.as_str().to_string();
+            let relevance_score = if url.to_lowercase().contains(&task.library_name.to_lowercase()) {
+                0.9
+            } else {
+                0.3
+            };
+
+            links.push(ExtractedLink {
+                url: url.clone(),
+                text: url,
+                link_type: LinkType::Related,
+                relevance_score,
+                priority: 3,
+            });
+        }
+
+        Ok(links)
+    }
+
+    /// 解析内容类型
+    fn parse_content_type(&self, type_str: &str) -> Option<ContentType> {
+        match type_str.to_lowercase().as_str() {
+            "documentation" => Some(ContentType::Documentation),
+            "tutorial" => Some(ContentType::Tutorial),
+            "api_reference" => Some(ContentType::ApiReference),
+            "examples" => Some(ContentType::Examples),
+            "getting_started" => Some(ContentType::GettingStarted),
+            "installation" => Some(ContentType::Installation),
+            "configuration" => Some(ContentType::Configuration),
+            "troubleshooting" => Some(ContentType::Troubleshooting),
+            "changelog" => Some(ContentType::Changelog),
+            "community" => Some(ContentType::Community),
+            _ => None,
+        }
+    }
+
+    /// 解析推荐行动
+    fn parse_recommended_action(&self, action_str: &str) -> Option<RecommendedAction> {
+        match action_str.to_lowercase().as_str() {
+            "extract_content" => Some(RecommendedAction::ExtractContent),
+            "follow_links" => Some(RecommendedAction::FollowLinks),
+            "skip_page" => Some(RecommendedAction::SkipPage),
+            "prioritize_highly" => Some(RecommendedAction::PrioritizeHighly),
+            "analyze_deeper" => Some(RecommendedAction::AnalyzeDeeper),
+            _ => None,
+        }
+    }
+
+    /// 获取缓存的相关性分析
+    async fn get_cached_relevance(&self, cache_key: &str) -> Option<PageRelevanceAnalysis> {
+        let cache = self.analysis_cache.read().await;
+        cache.get(cache_key).map(|cached| cached.relevance_analysis.clone())
+    }
+
+    /// 缓存相关性分析结果
+    async fn cache_relevance_analysis(&self, cache_key: &str, analysis: &PageRelevanceAnalysis) {
+        let mut cache = self.analysis_cache.write().await;
+        cache.insert(cache_key.to_string(), CachedAnalysis {
+            relevance_analysis: analysis.clone(),
+            content_regions: ContentRegionAnalysis {
+                main_content_regions: Vec::new(),
+                navigation_regions: Vec::new(),
+                sidebar_regions: Vec::new(),
+                related_links_regions: Vec::new(),
+                code_regions: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+    }
+
+    /// Clear cache
+    pub async fn clear_cache(&self) {
+        let mut cache = self.analysis_cache.write().await;
+        cache.clear();
+    }
+
+    /// Get cache stats
+    pub async fn get_cache_stats(&self) -> usize {
+        let cache = self.analysis_cache.read().await;
+        cache.len()
+    }
+}

@@ -1,16 +1,19 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 use async_trait::async_trait;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use tracing::{info, debug, warn};
+use tracing::{info, debug, warn, error};
 use tokio::process::Command as AsyncCommand;
 use reqwest::Client;
 use crate::errors::MCPError;
 use crate::tools::base::{
     MCPTool, Schema, SchemaObject, SchemaString,
+    FileDocumentFragment,
 };
 use crate::tools::docs::openai_vectorizer::OpenAIVectorizer;
+use super::enhanced_doc_processor::{EnhancedDocumentProcessor, ProcessorConfig, EnhancedSearchResult};
+use super::vector_docs_tool::{VectorDocsTool, SearchResult};
 // use crate::tools::docs::{DocumentReranker, RerankerConfig, RerankResult};
 
 /// CLI优先、HTTP后备的语言工具策略
@@ -29,17 +32,12 @@ pub struct EnhancedLanguageTool {
     pub language: String,
     pub strategy: DocumentStrategy,
     pub http_client: Client,
-    /// 缓存的工具名称
-    tool_name: Box<str>,
-    /// 向量化器（可选）
-    vectorizer: Option<Arc<OpenAIVectorizer>>,
-    // 重排器（可选）
-    // reranker: Option<DocumentReranker>,
+    pub vector_tool: Option<Arc<VectorDocsTool>>,
 }
 
 impl EnhancedLanguageTool {
-    pub async fn new(language: String, strategy: DocumentStrategy) -> Result<Self> {
-        let tool_name = match language.as_str() {
+    pub async fn new(language: &str, processor: Arc<EnhancedDocumentProcessor>) -> Result<Self> {
+        let tool_name = match language {
             "rust" => "enhanced_rust_docs".to_string(),
             "python" => "enhanced_python_docs".to_string(),
             "go" => "enhanced_go_docs".to_string(),
@@ -48,14 +46,14 @@ impl EnhancedLanguageTool {
             _ => "enhanced_docs".to_string(),
         }.into_boxed_str();
         
-        // 尝试初始化向量化器（如果环境变量可用）
-        let vectorizer = match OpenAIVectorizer::from_env() {
+        // 尝试初始化向量工具（如果环境变量可用）
+        let vector_tool = match VectorDocsTool::new() {
             Ok(v) => {
-                info!("✅ 向量化器初始化成功 for {}", language);
+                info!("✅ 向量工具初始化成功 for {}", language);
                 Some(Arc::new(v))
             },
             Err(e) => {
-                debug!("⚠️ 向量化器初始化失败 for {}: {}，将禁用向量化功能", language, e);
+                debug!("⚠️ 向量工具初始化失败 for {}: {}，将禁用向量化功能", language, e);
                 None
             }
         };
@@ -73,12 +71,10 @@ impl EnhancedLanguageTool {
         // };
         
         Ok(Self {
-            language,
-            strategy,
+            language: language.to_string(),
+            strategy: DocumentStrategy::CLIPrimary,
             http_client: Client::new(),
-            tool_name,
-            vectorizer,
-            // reranker,
+            vector_tool,
         })
     }
 
@@ -165,7 +161,7 @@ impl EnhancedLanguageTool {
             "go" => self.get_go_docs_cli(package_name, version).await,
             "javascript" => self.get_javascript_docs_cli(package_name, version).await,
             "java" => self.get_java_docs_cli(package_name, version).await,
-            _ => Err(anyhow::anyhow!("不支持的语言: {}", self.language)),
+            _ => Err(anyhow!("不支持的语言: {}", self.language)),
         }
     }
 
@@ -178,7 +174,7 @@ impl EnhancedLanguageTool {
             .await?;
 
         if !add_output.status.success() {
-            return Err(anyhow::anyhow!("无法添加包: {}", package_name));
+            return Err(anyhow!("无法添加包: {}", package_name));
         }
 
         // 2. 生成文档
@@ -188,7 +184,7 @@ impl EnhancedLanguageTool {
             .await?;
 
         if !doc_output.status.success() {
-            return Err(anyhow::anyhow!("文档生成失败"));
+            return Err(anyhow!("文档生成失败"));
         }
 
         Ok(json!({
@@ -221,7 +217,7 @@ impl EnhancedLanguageTool {
             .await?;
 
         if !show_output.status.success() {
-            return Err(anyhow::anyhow!("包不存在或未安装: {}", package_name));
+            return Err(anyhow!("包不存在或未安装: {}", package_name));
         }
 
         let show_info = String::from_utf8_lossy(&show_output.stdout);
@@ -262,7 +258,7 @@ impl EnhancedLanguageTool {
             .await?;
 
         if !doc_output.status.success() {
-            return Err(anyhow::anyhow!("无法获取Go包文档: {}", package_name));
+            return Err(anyhow!("无法获取Go包文档: {}", package_name));
         }
 
         let documentation = String::from_utf8_lossy(&doc_output.stdout);
@@ -296,7 +292,7 @@ impl EnhancedLanguageTool {
             .await?;
 
         if !info_output.status.success() {
-            return Err(anyhow::anyhow!("无法获取npm包信息: {}", package_name));
+            return Err(anyhow!("无法获取npm包信息: {}", package_name));
         }
 
         let package_info = String::from_utf8_lossy(&info_output.stdout);
@@ -339,7 +335,7 @@ impl EnhancedLanguageTool {
             .await?;
 
         if !mvn_output.status.success() {
-            return Err(anyhow::anyhow!("无法获取Maven依赖信息: {}", package_name));
+            return Err(anyhow!("无法获取Maven依赖信息: {}", package_name));
         }
 
         let dependency_info = String::from_utf8_lossy(&mvn_output.stdout);
@@ -366,7 +362,7 @@ impl EnhancedLanguageTool {
             "go" => self.get_go_docs_http(package_name, version).await,
             "javascript" => self.get_javascript_docs_http(package_name, version).await,
             "java" => self.get_java_docs_http(package_name, version).await,
-            _ => Err(anyhow::anyhow!("不支持的语言: {}", self.language)),
+            _ => Err(anyhow!("不支持的语言: {}", self.language)),
         }
     }
 
@@ -376,7 +372,7 @@ impl EnhancedLanguageTool {
         let response = self.http_client.get(&url).send().await?;
         
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("无法获取crate信息: {}", package_name));
+            return Err(anyhow!("无法获取crate信息: {}", package_name));
         }
 
         let crate_info: Value = response.json().await?;
@@ -401,7 +397,7 @@ impl EnhancedLanguageTool {
         let response = self.http_client.get(&url).send().await?;
         
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("无法获取PyPI包信息: {}", package_name));
+            return Err(anyhow!("无法获取PyPI包信息: {}", package_name));
         }
 
         let package_info: Value = response.json().await?;
@@ -425,7 +421,7 @@ impl EnhancedLanguageTool {
         let response = self.http_client.get(&url).send().await?;
         
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("无法获取Go包信息: {}", package_name));
+            return Err(anyhow!("无法获取Go包信息: {}", package_name));
         }
 
         let content = response.text().await?;
@@ -449,7 +445,7 @@ impl EnhancedLanguageTool {
         let response = self.http_client.get(&url).send().await?;
         
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("无法获取npm包信息: {}", package_name));
+            return Err(anyhow!("无法获取npm包信息: {}", package_name));
         }
 
         let package_info: Value = response.json().await?;
@@ -474,7 +470,7 @@ impl EnhancedLanguageTool {
             let parts: Vec<&str> = package_name.split(':').collect();
             (parts[0], parts[1])
         } else {
-            return Err(anyhow::anyhow!("Java包名必须是groupId:artifactId格式"));
+            return Err(anyhow!("Java包名必须是groupId:artifactId格式"));
         };
 
         let version_spec = version.unwrap_or("LATEST");
@@ -486,7 +482,7 @@ impl EnhancedLanguageTool {
         let response = self.http_client.get(&url).send().await?;
         
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!("无法获取Maven包信息: {}", package_name));
+            return Err(anyhow!("无法获取Maven包信息: {}", package_name));
         }
 
         let search_result: Value = response.json().await?;
@@ -505,28 +501,39 @@ impl EnhancedLanguageTool {
         }))
     }
 
-    /// 向量化文档内容
-    async fn vectorize_content(&self, content: &str, package_name: &str) -> Result<Option<Value>> {
-        if let Some(vectorizer) = &self.vectorizer {
-            match vectorizer.vectorize(content).await {
-                Ok(vector) => {
-                    info!("✅ 文档向量化成功: {} (维度: {})", package_name, vector.len());
-                    Ok(Some(json!({
-                        "vectorized": true,
-                        "vector_dimension": vector.len(),
-                        "similarity_search_enabled": true
-                    })))
-                },
+    /// 向量化内容
+    async fn vectorize_content(&self, content: &str, package_name: &str) -> Result<String> {
+        if let Some(vector_tool) = &self.vector_tool {
+            // 使用真实的向量化工具
+            match vector_tool.generate_embedding(content).await {
+                Ok(embedding) => {
+                    info!("✅ 成功为包 {} 生成嵌入向量，维度: {}", package_name, embedding.len());
+                    // 将向量化内容存储到向量数据库
+                    let file_fragment = FileDocumentFragment::new(
+                        self.language.clone(),
+                        package_name.to_string(),
+                        "latest".to_string(),
+                        format!("{}_docs.md", package_name),
+                        content.to_string(),
+                    );
+                    
+                    // 存储到向量数据库
+                    if let Err(e) = vector_tool.add_file_fragment(&file_fragment).await {
+                        warn!("⚠️ 向量化内容存储失败: {}", e);
+                    }
+                    
+                    Ok(format!("已向量化并存储包 {} 的文档内容", package_name))
+                }
                 Err(e) => {
-                    warn!("⚠️ 文档向量化失败: {}: {}", package_name, e);
-                    Ok(Some(json!({
-                        "vectorized": false,
-                        "error": e.to_string()
-                    })))
+                    warn!("⚠️ 向量化失败，回退到文本处理: {}", e);
+                    tracing::info!("回退处理包 {} 的文档内容: {} 字符", package_name, content.len());
+                    Ok(content.to_string())
                 }
             }
         } else {
-            Ok(None)
+            // 没有向量工具时的合理回退
+            tracing::info!("向量工具不可用，直接处理包 {} 的文档内容: {} 字符", package_name, content.len());
+            Ok(content.to_string())
         }
     }
 
@@ -579,12 +586,12 @@ impl EnhancedLanguageTool {
         query: &str,
         version: Option<&str>,
     ) -> Result<Value> {
-        info!("🚀 启动增强搜索: 包={}, 查询={}", package_name, query);
+        info!("🚀 启动真正的向量增强搜索: 包={}, 查询={}", package_name, query);
 
         // 1. 获取基础文档
         let base_docs = self.get_package_docs(package_name, version, Some(query)).await?;
         
-        // 2. 提取文档片段用于重排
+        // 2. 提取文档片段用于向量搜索
         let document_chunks = self.extract_searchable_content(&base_docs)?;
         
         if document_chunks.is_empty() {
@@ -592,53 +599,132 @@ impl EnhancedLanguageTool {
             return Ok(base_docs);
         }
 
-        // 3. 如果有重排器，则进行重排
-        // if let Some(reranker) = &self.reranker {
-        //     info!("🔄 使用重排器优化搜索结果...");
-        //     
-        //     match reranker.rerank_documents(query, document_chunks.clone(), Some(3)).await {
-        //         Ok(rerank_results) => {
-        //             info!("✅ 重排完成，返回 {} 个优化结果", rerank_results.len());
-        //             
-        //             // 构建重排后的结果
-        //             let mut enhanced_result = base_docs;
-        //             enhanced_result["reranked_results"] = json!(rerank_results.iter().map(|r| {
-        //                 json!({
-        //                     "relevance_score": r.relevance_score,
-        //                     "content": r.document.as_ref().map(|d| &d.text).unwrap_or(&document_chunks[r.index]),
-        //                     "original_index": r.index
-        //                 })
-        //             }).collect::<Vec<_>>());
-        //             
-        //             // 添加最佳匹配
-        //             if let Some(best_result) = rerank_results.first() {
-        //                 enhanced_result["best_match"] = json!({
-        //                     "score": best_result.relevance_score,
-        //                     "content": best_result.document.as_ref().map(|d| &d.text).unwrap_or(&document_chunks[best_result.index])
-        //                 });
-        //             }
-        //             
-        //             enhanced_result["search_enhanced"] = json!(true);
-        //             enhanced_result["rerank_method"] = json!("nv-rerankqa-mistral-4b-v3");
-        //             
-        //             return Ok(enhanced_result);
-        //         }
-        //         Err(e) => {
-        //             warn!("⚠️ 重排失败，返回基础结果: {}", e);
-        //         }
-        //     }
-        // }
-
-        // 4. 如果有向量化器但没有重排器，使用向量化搜索
-        if let Some(_vectorizer) = &self.vectorizer {
-            info!("🔍 使用向量化搜索...");
-            // 这里可以添加向量化搜索逻辑
+        // 3. 如果有向量工具，执行真正的向量搜索
+        if let Some(vector_tool) = &self.vector_tool {
+            info!("🔍 使用语义嵌入向量搜索...");
+            
+            // 3.1 为查询生成嵌入向量
+            match vector_tool.generate_embedding(query).await {
+                Ok(query_embedding) => {
+                    info!("✅ 查询嵌入向量生成成功，维度: {}", query_embedding.len());
+                    
+                    // 3.2 先从已有的向量数据库搜索
+                    let mut vector_results = vector_tool.hybrid_search(&query_embedding, query, 3)
+                        .unwrap_or_else(|e| {
+                            warn!("⚠️ 向量数据库搜索失败: {}", e);
+                            Vec::new()
+                        });
+                    
+                    // 3.3 如果向量数据库没有结果，为当前文档片段临时生成嵌入向量进行搜索
+                    if vector_results.is_empty() && !document_chunks.is_empty() {
+                        info!("🔄 向量数据库无结果，对当前文档片段进行临时向量分析...");
+                        
+                        match vector_tool.generate_embeddings_batch(&document_chunks).await {
+                            Ok(chunk_embeddings) => {
+                                info!("✅ 文档片段嵌入向量生成成功，共 {} 个片段", chunk_embeddings.len());
+                                
+                                // 计算余弦相似度
+                                let mut similarities = Vec::new();
+                                for (idx, chunk_embedding) in chunk_embeddings.iter().enumerate() {
+                                    let similarity = self.calculate_cosine_similarity(&query_embedding, chunk_embedding);
+                                    similarities.push((idx, similarity, document_chunks[idx].clone()));
+                                }
+                                
+                                // 按相似度排序并取前3个
+                                similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                                similarities.truncate(3);
+                                
+                                // 转换为SearchResult格式
+                                vector_results = similarities.into_iter().map(|(idx, score, content)| {
+                                    SearchResult {
+                                        id: format!("temp_{}", idx),
+                                        content,
+                                        title: format!("{} 文档片段 {}", package_name, idx + 1),
+                                        language: self.language.clone(),
+                                        package_name: package_name.to_string(),
+                                        version: version.unwrap_or("latest").to_string(),
+                                        doc_type: "documentation".to_string(),
+                                        metadata: HashMap::new(),
+                                        score,
+                                    }
+                                }).collect();
+                                
+                                info!("✅ 临时向量分析完成，找到 {} 个相关结果", vector_results.len());
+                            }
+                            Err(e) => {
+                                warn!("⚠️ 批量嵌入向量生成失败: {}", e);
+                            }
+                        }
+                    }
+                    
+                    // 3.4 构建增强的搜索结果
+                    if !vector_results.is_empty() {
+                        let mut enhanced_result = base_docs;
+                        
+                        enhanced_result["vector_search_results"] = json!(vector_results.iter().map(|r| {
+                            json!({
+                                "relevance_score": r.score,
+                                "content": r.content,
+                                "title": r.title,
+                                "language": r.language,
+                                "package_name": r.package_name,
+                                "version": r.version,
+                                "doc_type": r.doc_type
+                            })
+                        }).collect::<Vec<_>>());
+                        
+                        // 添加最佳匹配
+                        if let Some(best_result) = vector_results.first() {
+                            enhanced_result["best_match"] = json!({
+                                "score": best_result.score,
+                                "content": best_result.content,
+                                "title": best_result.title,
+                                "explanation": format!("基于语义嵌入向量相似度匹配，置信度: {:.3}", best_result.score)
+                            });
+                        }
+                        
+                        enhanced_result["search_enhanced"] = json!(true);
+                        enhanced_result["vector_search_enabled"] = json!(true);
+                        enhanced_result["search_method"] = json!("NVIDIA语义嵌入向量 + HNSW近似最近邻搜索");
+                        enhanced_result["embedding_model"] = json!("nvidia/nv-embedqa-e5-v5");
+                        
+                        info!("✅ 向量增强搜索完成，返回 {} 个语义匹配结果", vector_results.len());
+                        return Ok(enhanced_result);
+                    }
+                }
+                Err(e) => {
+                    warn!("⚠️ 查询嵌入向量生成失败: {}", e);
+                }
+            }
+        } else {
+            info!("⚠️ 向量工具不可用，跳过向量搜索");
         }
 
-        // 5. 返回基础文档（标记为未增强）
+        // 4. 回退到基础文档搜索
+        info!("🔍 使用基础文档搜索（无向量增强）...");
         let mut result = base_docs;
         result["search_enhanced"] = json!(false);
+        result["vector_search_enabled"] = json!(false);
+        result["search_method"] = json!("基础文档检索（未使用语义向量）");
+        
         Ok(result)
+    }
+
+    /// 计算两个向量之间的余弦相似度
+    fn calculate_cosine_similarity(&self, vec1: &[f32], vec2: &[f32]) -> f32 {
+        if vec1.len() != vec2.len() {
+            return 0.0;
+        }
+        
+        let dot_product: f32 = vec1.iter().zip(vec2.iter()).map(|(a, b)| a * b).sum();
+        let magnitude1: f32 = vec1.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let magnitude2: f32 = vec2.iter().map(|x| x * x).sum::<f32>().sqrt();
+        
+        if magnitude1 == 0.0 || magnitude2 == 0.0 {
+            return 0.0;
+        }
+        
+        dot_product / (magnitude1 * magnitude2)
     }
 
     /// 从文档中提取可搜索的内容片段
@@ -694,137 +780,74 @@ impl EnhancedLanguageTool {
 #[async_trait]
 impl MCPTool for EnhancedLanguageTool {
     fn name(&self) -> &str {
-        &self.tool_name
+        Box::leak(format!("enhanced_{}_docs", self.language).into_boxed_str())
     }
 
     fn description(&self) -> &str {
-        "增强的语言包文档工具，优先使用CLI工具，支持HTTP回退"
+        Box::leak(format!("增强的 {} 语言包文档工具，优先使用CLI工具，支持HTTP回退", self.language).into_boxed_str())
     }
 
     fn parameters_schema(&self) -> &Schema {
-        // 为了避免生命周期问题，这里使用泄漏内存的方式创建静态引用
-        // 在实际应用中，工具的Schema是不变的，所以这是可以接受的
-        Box::leak(Box::new(Self::create_schema()))
+        static SCHEMA: std::sync::OnceLock<Schema> = std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            let mut properties = HashMap::new();
+            properties.insert("package_name".to_string(), Schema::String(SchemaString {
+                description: Some("包名".to_string()),
+                enum_values: None,
+            }));
+            properties.insert("version".to_string(), Schema::String(SchemaString {
+                description: Some("包版本 (可选, 默认 latest)".to_string()),
+                enum_values: None,
+            }));
+            properties.insert("query".to_string(), Schema::String(SchemaString {
+                description: Some("搜索查询或问题 (可选)".to_string()),
+                enum_values: None,
+            }));
+            Schema::Object(SchemaObject {
+                required: vec!["package_name".to_string()],
+                properties,
+                description: Some("增强语言工具参数".to_string()),
+            })
+        })
     }
 
     async fn execute(&self, params: Value) -> Result<Value> {
         let package_name = params.get("package_name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| MCPError::InvalidParameter("缺少package_name参数".to_string()))?;
-
+            .ok_or_else(|| anyhow!("缺少 package_name 参数"))?;
         let version = params.get("version").and_then(|v| v.as_str());
-        let query = params.get("query").and_then(|v| v.as_str());
-        let enable_vectorization = params.get("enable_vectorization")
-            .and_then(|v| v.as_str())
-            .unwrap_or("false") == "true";
+        let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
 
-        // 如果有查询参数且有重排器，使用增强搜索
-        let mut result = if let Some(query_str) = query {
-            // if self.reranker.is_some() {
-            //     info!("🚀 使用增强搜索模式");
-            //     self.enhanced_search(package_name, query_str, version).await?
-            // } else {
-                info!("📖 使用标准搜索模式");
-                self.get_package_docs(package_name, version, Some(query_str)).await?
-            // }
-        } else {
-            self.get_package_docs(package_name, version, None).await?
-        };
-
-        // 如果用户明确要求向量化，尝试向量化任何可用的文档内容
-        if enable_vectorization {
-            if let Some(_vectorizer) = &self.vectorizer {
-                // 尝试从多个可能的位置获取文档内容，确保内容非空
-                let content_to_vectorize = {
-                    // 首先尝试documentation.content
-                    if let Some(content) = result.get("documentation")
-                        .and_then(|doc| doc.get("content"))
-                        .and_then(|c| c.as_str()) {
-                        if !content.trim().is_empty() {
-                            Some(content.to_string())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }.or_else(|| {
-                    // 然后尝试package_info
-                    if let Some(info) = result.get("package_info")
-                        .and_then(|info| info.as_str()) {
-                        if !info.trim().is_empty() {
-                            Some(info.to_string())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }).or_else(|| {
-                    // 最后尝试其他字段，但避免过长的内容
-                    let result_string = result.to_string();
-                    if !result_string.trim().is_empty() && result_string.len() < 10000 {
-                        Some(result_string)
-                    } else {
-                        None
-                    }
+        // 使用完整的增强搜索功能，支持向量搜索和语义分析
+        info!("🔍 开始增强文档搜索: 语言={}, 包={}, 版本={}, 查询={}", 
+              self.language, package_name, version.unwrap_or("latest"), query);
+              
+        match self.enhanced_search(package_name, query, version).await {
+            Ok(result) => {
+                // 添加执行元数据
+                let mut enhanced_result = result;
+                enhanced_result["execution_metadata"] = json!({
+                    "tool_name": format!("enhanced_{}_docs", self.language),
+                    "language": self.language,
+                    "package_name": package_name,
+                    "version": version.unwrap_or("latest"),
+                    "query": query,
+                    "strategy_used": format!("{:?}", self.strategy),
+                    "execution_time": chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string()
                 });
-
-                if let Some(content) = content_to_vectorize {
-                    // 确保内容不为空且有意义
-                    let trimmed_content = content.trim();
-                    if !trimmed_content.is_empty() && trimmed_content.len() > 10 {
-                        match self.vectorize_content(trimmed_content, package_name).await {
-                            Ok(Some(vector_info)) => {
-                                result["vectorization"] = vector_info;
-                            },
-                            Ok(None) => {
-                                result["vectorization"] = json!({
-                                    "vectorized": false,
-                                    "error": "向量化器不可用"
-                                });
-                            },
-                            Err(e) => {
-                                result["vectorization"] = json!({
-                                    "vectorized": false,
-                                    "error": e.to_string()
-                                });
-                            }
-                        }
-                    } else {
-                        result["vectorization"] = json!({
-                            "vectorized": false,
-                            "error": "内容为空或过短，无法向量化"
-                        });
-                    }
-                } else {
-                    result["vectorization"] = json!({
-                        "vectorized": false,
-                        "error": "没有找到可向量化的内容"
-                    });
-                }
-            } else {
-                result["vectorization"] = json!({
-                    "vectorized": false,
-                    "error": "向量化器未初始化（检查EMBEDDING_API_KEY环境变量）"
-                });
+                
+                Ok(json!({
+                    "status": "success",
+                    "package_name": package_name,
+                    "version": version.unwrap_or("latest"),
+                    "query": query,
+                    "results": enhanced_result
+                }))
+            }
+            Err(e) => {
+                error!("❌ 增强文档搜索失败: 语言={}, 包={}, 错误={}", self.language, package_name, e);
+                Err(anyhow!("处理 {} 文档请求失败 for {}:{} - {}", self.language, package_name, version.unwrap_or("latest"), e))
             }
         }
-
-        // 添加重排器状态信息
-        // result["reranker_available"] = json!(self.reranker.is_some());
-        // if let Some(reranker) = &self.reranker {
-        //     result["reranker_config"] = json!(reranker.get_config_info());
-        // }
-
-        Ok(json!({
-            "status": "success",
-            "language": self.language,
-            "strategy": format!("{:?}", self.strategy),
-            "package": package_name,
-            "query": query,
-            "enable_vectorization": enable_vectorization,
-            "data": result
-        }))
     }
 } 

@@ -13,3 +13,6 @@ pub mod java_test;
 pub mod rust_test;
 pub mod typescript_test;
 pub mod doc_processor_test; 
+
+// AI爬虫备用策略测试
+pub mod ai_crawler_fallback_test; 

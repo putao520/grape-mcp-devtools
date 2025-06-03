@@ -147,7 +147,7 @@ impl DynamicToolRegistry {
         });
 
         self.register_factory("_universal_api_docs", || {
-            Box::new(GetApiDocsTool::new(None))
+            Box::new(GetApiDocsTool::new())
         });
 
         // 通用语言文档工具（始终可用）

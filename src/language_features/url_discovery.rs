@@ -44,9 +44,12 @@ pub enum UrlType {
     ReleaseNotes,
     Documentation,
     ApiReference,
+    Tutorial,
+    Example,
     BlogPost,
     GitHubRelease,
     VersionHistory,
+    Other,
     Unknown,
 }
 

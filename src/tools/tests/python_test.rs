@@ -99,7 +99,7 @@ fastapi[all]>=0.100.0
 async fn test_python_api_docs() -> Result<()> {
     println!("📚 测试Python API文档获取功能");
     
-    let api_tool = GetApiDocsTool::new(None);
+    let api_tool = GetApiDocsTool::new();
     
     let params = json!({
         "language": "python",
@@ -295,7 +295,7 @@ async fn test_python_integration_workflow() -> Result<()> {
     
     // 3. 获取API文档
     println!("\n步骤3: 获取API文档");
-    let api_tool = GetApiDocsTool::new(None);
+    let api_tool = GetApiDocsTool::new();
     let api_params = json!({
         "language": "python",
         "package": "requests",

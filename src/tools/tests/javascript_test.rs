@@ -218,7 +218,7 @@ function processUsers(users) {
 async fn test_javascript_api_docs() -> Result<()> {
     println!("📚 测试JavaScript API文档获取功能");
     
-    let api_tool = GetApiDocsTool::new(None);
+    let api_tool = GetApiDocsTool::new();
     
     let params = json!({
         "language": "javascript",
